@@ -25,7 +25,7 @@ __global__ void reduce_sum_rows_kernel(const T* input, T* output, std::int64_t r
     }
     T sum = 0;
     for (std::int64_t i = 0; i < cols; ++i) {
-        sum +=  input[cols * tid + i];
+        sum +=  input[tid * cols + i];
     }
     output[tid] = sum;
 }
@@ -43,6 +43,10 @@ void reduce_sum_rows(Tensor* out, const Tensor& input, const ExecutionContext& c
     assert(out->rank() == 1);
     assert(out->shape(0) == rows);
 
+    cudaStream_t s = static_cast<cudaStream_t>(ctx.stream);
+    std::int64_t block = 256;
+    std::int64_t grid = (rows + block -1) / block;
+
     // TODO(operator): launch reduce_sum_rows_kernel。
     // 提示：
     //   1. 解包裸指针：const T* in = static_cast<const T*>(input.data());
@@ -52,15 +56,11 @@ void reduce_sum_rows(Tensor* out, const Tensor& input, const ExecutionContext& c
     //   4. 用非默认流 launch：kernel<<<grid, block, 0, s>>>(in, out_ptr, rows, cols)。
     // kernel 错误由调用方检查（cudaGetLastError/同步），这里不返回。
     switch (input.dtype()) {
-        case DType::kFloat32: {
-            const float* in = static_cast<const float*>(input.data());
-            float* out_ptr = static_cast<float*>(out->data());
-            cudaStream_t s = static_cast<cudaStream_t>(ctx.stream);
-            std::int64_t block = 256;
-            std::int64_t grid = (rows + block -1) / block;
-            reduce_sum_rows_kernel<<<grid, block, 0, s>>>(in, out_ptr, rows, cols);
+        case DType::kFloat32:
+            reduce_sum_rows_kernel<float><<<grid, block, 0, s>>>(
+                static_cast<const float*>(input.data()), static_cast<float*>(out->data()), rows,
+                cols);
             break;
-        }
         default:
             return;
     }
