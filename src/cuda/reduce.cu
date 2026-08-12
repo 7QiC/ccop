@@ -17,14 +17,14 @@ namespace {
 //       output[i] = sum_j input[i * cols + j]
 //   - 越界线程直接 return（grid 按 rows 向上取整）。
 template <typename T>
-__global__ void reduce_sum_rows_kernel(const T* input, T* output, std::int64_t rows,
-                                       std::int64_t cols) {
-    std::int64_t tid = threadIdx.x + blockDim.x * blockIdx.x;
+__global__ void reduce_sum_rows_kernel(const T* input, T* output, unsigned int rows,
+                                       unsigned int cols) {
+    unsigned int tid = threadIdx.x + blockDim.x * blockIdx.x;
     if (tid >= rows) {
         return;
     }
     T sum = 0;
-    for (std::int64_t i = 0; i < cols; ++i) {
+    for (unsigned int i = 0; i < cols; ++i) {
         sum +=  input[tid * cols + i];
     }
     output[tid] = sum;
@@ -38,14 +38,14 @@ void reduce_sum_rows(Tensor* out, const Tensor& input, const ExecutionContext& c
     assert(input.rank() == 2);
     assert(input.is_contiguous());
 
-    const std::int64_t rows = input.shape(0);
-    const std::int64_t cols = input.shape(1);
+    const unsigned int rows = static_cast<unsigned int>(input.shape(0));
+    const unsigned int cols = static_cast<unsigned int>(input.shape(1));
     assert(out->rank() == 1);
     assert(out->shape(0) == rows);
 
     cudaStream_t s = static_cast<cudaStream_t>(ctx.stream);
-    std::int64_t block = 256;
-    std::int64_t grid = (rows + block -1) / block;
+    const unsigned int block = 256;
+    const unsigned int grid = static_cast<unsigned int>((rows + block - 1) / block);
 
     // TODO(operator): launch reduce_sum_rows_kernel。
     // 提示：

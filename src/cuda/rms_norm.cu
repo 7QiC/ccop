@@ -24,19 +24,19 @@ namespace {
 //   - 越界线程直接 return（grid 按 rows 向上取整）。
 template <typename ActivationT, typename WeightT>
 __global__ void rms_norm_kernel(const ActivationT* input, const WeightT* weight,
-                                ActivationT* output, std::int64_t rows, std::int64_t dim,
+                                ActivationT* output, unsigned int rows, unsigned int dim,
                                 float eps) {
-    std::int64_t tid = threadIdx.x + blockDim.x * blockIdx.x;
+    unsigned int tid = threadIdx.x + blockDim.x * blockIdx.x;
     if (tid >= rows) {
         return;
     }
     float sum = 0;
-    for (std::int64_t i = 0; i < dim; ++i) {
+    for (unsigned int i = 0; i < dim; ++i) {
         float v = static_cast<float>(input[tid * dim + i]);
         sum += v * v;
     }
     float rms = sqrt(sum / dim + eps);
-    for (std::int64_t i = 0; i < dim; ++i) {
+    for (unsigned int i = 0; i < dim; ++i) {
         output[tid * dim + i] = (ActivationT)((float)input[tid * dim + i] / rms * (float)weight[i]);
     }
 }
@@ -54,12 +54,12 @@ void rms_norm(Tensor* out, const Tensor& input, const Tensor& weight, float eps,
     assert(input.shape(1) == weight.shape(0));
     assert(eps > 0.0f);
 
-    const std::int64_t rows = input.shape(0);
-    const std::int64_t dim = input.shape(1);
+    const unsigned int rows = static_cast<unsigned int>(input.shape(0));
+    const unsigned int dim = static_cast<unsigned int>(input.shape(1));
 
     cudaStream_t s = static_cast<cudaStream_t>(ctx.stream);
-    std::int64_t block = 256;
-    std::int64_t grid = (rows + block -1) / block;
+    const unsigned int block = 256;
+    const unsigned int grid = static_cast<unsigned int>((rows + block - 1) / block);
 
     // 组合 dtype 分发：activation dtype × weight dtype → kernel 模板实例。
     // 先用 BF16×FP32（LLM 标准）和 FP32×FP32 两种组合，后续按需扩展。
