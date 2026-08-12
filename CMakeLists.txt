@@ -24,7 +24,7 @@ target_link_libraries(ccop PUBLIC CUDA::cudart)
 
 if(CCOP_BACKEND STREQUAL "cuda")
     target_sources(ccop PRIVATE src/cuda/reduce.cu src/cuda/rms_norm.cu src/cuda/rope.cu
-                                   src/cuda/silu_mul.cu)
+                                   src/cuda/silu_mul.cu src/cuda/softmax.cu)
 endif()
 
 add_library(ccop::ccop ALIAS ccop)
