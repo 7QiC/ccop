@@ -1,10 +1,10 @@
-#include <cuda_bf16.h>
-#include <cuda_runtime.h>
+#include "ccop/ops/silu_mul.h"
 
 #include <cassert>
 #include <cmath>
 
-#include "ccop/ops/silu_mul.h"
+#include <cuda_bf16.h>
+#include <cuda_runtime.h>
 
 namespace ccop {
 namespace {

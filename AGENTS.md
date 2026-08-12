@@ -46,7 +46,7 @@ ctest --test-dir build
 - 命名：类/枚举/结构 PascalCase；函数/变量/文件 snake_case；成员尾部下划线（`int count_;`）。
 - 参数语义：**只读参数用 `const T&`；会被修改的参数不用引用，直接传指针 `T*`**（输出/原地修改参数必须是指针，调用处 `&x` 显式可见）。
 - 数值类型约定：维度、网格尺寸（block/grid）、kernel 索引（tid 等）统一用 `unsigned int`（32 位足够：uint32 上限约 42.9 亿，覆盖 32 头 × 100 万上下文 × head_dim 的目标场景）；不引入 64 位索引。
-- 头文件 `.h` + `#pragma once`；包含顺序：C 标准 → C++ 标准 → 第三方 → 项目；IWYU，头文件内前向声明，不依赖间接包含。
+- 头文件 `.h` + `#pragma once`；包含顺序：源文件对应头（主头，由 `.clang-format` 的 IncludeIsMainRegex 识别）第一 → C/C++ 标准库 → 第三方（CUDA/gtest）→ 其他项目头，组内按字母序；IWYU，头文件内前向声明，不依赖间接包含。
 - 错误处理：骨架阶段用 `assert` + 无效 Tensor（`valid() == false`）表示失败；后续引入错误体系前，热路径不抛异常。
 - 内存：显存所有权在框架侧，ccop 不分配/不释放用户内存；测试内部可有自己的 test allocator。
 - 注释：不写多余注释，只在必要处写简洁注释；不逐行复述代码，不把对话中的决策写进代码注释。kernel 函数侧例外——按算子实现指导保留所需的提示/引导注释（如 `// TODO(operator): implement ...`、tiling/优化方向提示），这类注释属于协作引导内容，不得删减。
