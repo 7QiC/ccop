@@ -34,6 +34,7 @@ ctest --test-dir build
 本项目以提升用户算子能力为目标，Agent（Codex）与用户的协作方式固定如下：
 
 1. **Agent 只搭框架，不写算子实现内容**：函数签名、分派骨架、`// TODO(operator): implement ...` 注释。算子核心逻辑（kernel、tiling、softmax、融合等）由用户自己写。
+   - **引导注释规范（强制）**：TODO 引导只描述问题的数学形式（公式/矩阵）、数据布局（形状、线性偏移）、并行映射（grid/block/thread 的 x/y/z 语义、边界守卫的来源）与数值注意点；**不得给出逐行代码步骤或可照抄的实现片段**。用户根据这些信息自行推导实现，以实现练习为第一目的。
 2. **Agent 写测试用例**：每个新算子必须带 GTest 测试（正确性对拍 naive/PyTorch/vendor、边界 shape、dtype 检查）。
 3. **用户补充实现后，由 Agent 跑测试、review 代码、指出错误**：Agent 给出具体错误位置和原因，用户继续修改，循环直到全绿。
 4. **算子优化同样遵守**：Agent 提供 profiling 证据和优化方向，不替用户写优化后的 kernel；用户实现后 Agent 复测。
@@ -44,6 +45,7 @@ ctest --test-dir build
 - C++23，命名空间 `ccop`。
 - 命名：类/枚举/结构 PascalCase；函数/变量/文件 snake_case；成员尾部下划线（`int count_;`）。
 - 参数语义：**只读参数用 `const T&`；会被修改的参数不用引用，直接传指针 `T*`**（输出/原地修改参数必须是指针，调用处 `&x` 显式可见）。
+- 数值类型约定：维度、网格尺寸（block/grid）、kernel 索引（tid 等）统一用 `unsigned int`（32 位足够：uint32 上限约 42.9 亿，覆盖 32 头 × 100 万上下文 × head_dim 的目标场景）；不引入 64 位索引。
 - 头文件 `.h` + `#pragma once`；包含顺序：C 标准 → C++ 标准 → 第三方 → 项目；IWYU，头文件内前向声明，不依赖间接包含。
 - 错误处理：骨架阶段用 `assert` + 无效 Tensor（`valid() == false`）表示失败；后续引入错误体系前，热路径不抛异常。
 - 内存：显存所有权在框架侧，ccop 不分配/不释放用户内存；测试内部可有自己的 test allocator。

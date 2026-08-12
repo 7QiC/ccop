@@ -12,12 +12,14 @@ enum class DType : std::uint8_t {
     kFloat16,
     kBFloat16,
     kInt8,
+    kInt32,
 };
 
 struct Float32Tag {};
 struct Float16Tag {};
 struct BFloat16Tag {};
 struct Int8Tag {};
+struct Int32Tag {};
 
 // 单一事实源：tag -> enum / name / byte size。
 template <typename Tag>
@@ -51,6 +53,13 @@ struct DTypeTraits<Int8Tag> {
     static constexpr std::size_t size = sizeof(std::int8_t);
 };
 
+template <>
+struct DTypeTraits<Int32Tag> {
+    static constexpr DType dtype = DType::kInt32;
+    static constexpr std::string_view name = "int32";
+    static constexpr std::size_t size = sizeof(std::int32_t);
+};
+
 template <typename Tag>
 inline constexpr DType dtype_v = DTypeTraits<Tag>::dtype;
 
@@ -70,6 +79,8 @@ inline constexpr std::size_t dtype_size(DType dt) noexcept {
             return dtype_size_v<BFloat16Tag>;
         case DType::kInt8:
             return dtype_size_v<Int8Tag>;
+        case DType::kInt32:
+            return dtype_size_v<Int32Tag>;
         case DType::kUnknown:
             return 0;
     }
@@ -86,6 +97,8 @@ inline constexpr std::string_view dtype_name(DType dt) noexcept {
             return dtype_name_v<BFloat16Tag>;
         case DType::kInt8:
             return dtype_name_v<Int8Tag>;
+        case DType::kInt32:
+            return dtype_name_v<Int32Tag>;
         case DType::kUnknown:
             return {};
     }
@@ -106,10 +119,16 @@ struct NativeOf<Int8Tag> {
     using type = std::int8_t;
 };
 
+template <>
+struct NativeOf<Int32Tag> {
+    using type = std::int32_t;
+};
+
 template <typename Tag>
 using native_t = typename NativeOf<Tag>::type;
 
 static_assert(dtype_size_v<Float32Tag> == sizeof(native_t<Float32Tag>));
 static_assert(dtype_size_v<Int8Tag> == sizeof(native_t<Int8Tag>));
+static_assert(dtype_size_v<Int32Tag> == sizeof(native_t<Int32Tag>));
 
 }  // namespace ccop
