@@ -1,7 +1,6 @@
 #include "ccop/ops/reduce.h"
 
 #include <cassert>
-#include <cstdint>
 
 #include <cuda_runtime.h>
 

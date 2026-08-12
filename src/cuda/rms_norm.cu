@@ -1,7 +1,6 @@
 #include "ccop/ops/rms_norm.h"
 
 #include <cassert>
-#include <cstdint>
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
