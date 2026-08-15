@@ -9,6 +9,11 @@ endif()
 option(CCop_BUILD_TESTS "Build ccop tests" OFF)
 include(CTest)
 
+# 供 clangd 等工具消费真实编译参数（.clangd 已指向 build/）。
+# 关闭 include 的 response file：clangd 不展开 --options-file 会丢失头文件路径。
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_INCLUDES OFF)
+
 # Backend implementation selection.
 # Public interfaces stay in include/ccop/; backend-specific sources live in
 # src/<CCOP_BACKEND>/ (e.g. src/cuda/, future src/cpu/) and are selected here

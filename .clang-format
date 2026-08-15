@@ -8,6 +8,9 @@ MaxEmptyLinesToKeep: 1
 IncludeBlocks: Regroup
 IncludeIsMainRegex: '(Test)?$'
 IncludeCategories:
+  - Regex: '^"ccop/ops/.*\.h"$'
+    Priority: 0
+    SortPriority: 0
   - Regex: '^<(cuda|gtest).*>'
     Priority: 4
     SortPriority: 2
