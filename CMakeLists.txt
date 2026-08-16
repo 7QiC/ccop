@@ -29,10 +29,10 @@ target_link_libraries(ccop PUBLIC CUDA::cudart)
 
 if(CCOP_BACKEND STREQUAL "cuda")
     target_sources(ccop PRIVATE src/cuda/element_add.cu src/cuda/embed.cu
-                                   src/cuda/naive_attention.cu src/cuda/reduce.cu
-                                   src/cuda/rms_norm.cu src/cuda/rope.cu src/cuda/silu_mul.cu
-                                   src/cuda/softmax.cu src/cuda/split_qkv.cu
-                                   src/cuda/write_kv_cache.cu)
+                                   src/cuda/greedy_sample.cu src/cuda/naive_attention.cu
+                                   src/cuda/reduce.cu src/cuda/rms_norm.cu src/cuda/rope.cu
+                                   src/cuda/silu_mul.cu src/cuda/softmax.cu
+                                   src/cuda/split_qkv.cu src/cuda/write_kv_cache.cu)
 endif()
 
 add_library(ccop::ccop ALIAS ccop)
