@@ -202,8 +202,8 @@ void run_and_check(const std::vector<float>& host_q, const std::vector<float>& h
         {static_cast<std::int64_t>(total_q_tokens), static_cast<std::int64_t>(num_q_heads),
          static_cast<std::int64_t>(head_dim)});
 
-    prefill_attention(q_tensor, k_cache_tensor, v_cache_tensor, table_tensor, loc_tensor,
-                      lens_tensor, &out_tensor, scale, ExecutionContext{});
+    ASSERT_TRUE(prefill_attention(q_tensor, k_cache_tensor, v_cache_tensor, table_tensor,
+                                  loc_tensor, lens_tensor, &out_tensor, scale, ExecutionContext{}));
     ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
 
     std::vector<T> host_out(expected.size());
@@ -263,6 +263,40 @@ TEST(PrefillAttentionTest, LargeScores) {
     const std::vector<float> v_cache(4 * 2 * 2 * 8, 1.0f);
     run_and_check<float>(q, k_cache, v_cache, {0, 2, 1, 3}, {0, 3, 5}, {3, 2}, 2, 2, 2, 8, 4, 2,
                          1e-4f);
+}
+
+TEST(PrefillAttentionTest, InvalidArgument) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor q_tensor(ptr, DType::kFloat32, kCuda0, {2, 2, 2});
+    Tensor k_cache_tensor(ptr, DType::kFloat32, kCuda0, {2, 1, 2, 2});
+    Tensor v_cache_tensor(ptr, DType::kFloat32, kCuda0, {2, 1, 2, 2});
+    Tensor table_tensor(ptr, DType::kInt32, kCuda0, {1, 2});
+    Tensor loc_tensor(ptr, DType::kInt32, kCuda0, {2});
+    Tensor lens_tensor(ptr, DType::kInt32, kCuda0, {2});
+    Tensor out_tensor(ptr, DType::kFloat32, kCuda0, {2, 2, 2});
+    auto result = prefill_attention(q_tensor, k_cache_tensor, v_cache_tensor, table_tensor,
+                                    loc_tensor, lens_tensor, &out_tensor, 0.5f, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kInvalidArgument);
+}
+
+TEST(PrefillAttentionTest, UnsupportedDtype) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor q_tensor(ptr, DType::kFloat16, kCuda0, {2, 2, 2});
+    Tensor k_cache_tensor(ptr, DType::kFloat16, kCuda0, {2, 1, 2, 2});
+    Tensor v_cache_tensor(ptr, DType::kFloat16, kCuda0, {2, 1, 2, 2});
+    Tensor table_tensor(ptr, DType::kInt32, kCuda0, {1, 2});
+    Tensor loc_tensor(ptr, DType::kInt32, kCuda0, {2});
+    Tensor lens_tensor(ptr, DType::kInt32, kCuda0, {1});
+    Tensor out_tensor(ptr, DType::kFloat16, kCuda0, {2, 2, 2});
+    auto result = prefill_attention(q_tensor, k_cache_tensor, v_cache_tensor, table_tensor,
+                                    loc_tensor, lens_tensor, &out_tensor, 0.5f, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kUnsupported);
 }
 
 }  // namespace

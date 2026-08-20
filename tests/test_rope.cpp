@@ -1,3 +1,5 @@
+#include "ccop/ops/rope.h"
+
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -7,7 +9,6 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
-#include "ccop/ops/rope.h"
 #include "ccop/tensor.h"
 
 namespace ccop {
@@ -52,14 +53,11 @@ std::vector<float> reference_cache(int max_position, int rotary_dim, float rope_
     for (int pos = 0; pos < max_position; ++pos) {
         const float fpos = static_cast<float>(pos);
         for (int pair = 0; pair < half_dim; ++pair) {
-            const float inv_freq =
-                1.0f / std::pow(rope_theta, static_cast<float>(2 * pair) /
-                                                static_cast<float>(rotary_dim));
+            const float inv_freq = 1.0f / std::pow(rope_theta, static_cast<float>(2 * pair) /
+                                                                   static_cast<float>(rotary_dim));
             const float angle = fpos * inv_freq;
-            cache[static_cast<std::size_t>((pos * half_dim + pair) * 2) + 0] =
-                std::cos(angle);
-            cache[static_cast<std::size_t>((pos * half_dim + pair) * 2) + 1] =
-                std::sin(angle);
+            cache[static_cast<std::size_t>((pos * half_dim + pair) * 2) + 0] = std::cos(angle);
+            cache[static_cast<std::size_t>((pos * half_dim + pair) * 2) + 1] = std::sin(angle);
         }
     }
     return cache;
@@ -75,8 +73,7 @@ void reference_rope(T* q, T* k, const int32_t* positions, const float* cache,
         for (std::int64_t t = 0; t < num_tokens; ++t) {
             const int pos = positions[t];
             for (int h = 0; h < num_heads; ++h) {
-                const std::int64_t base =
-                    (t * static_cast<std::int64_t>(num_heads) + h) * head_dim;
+                const std::int64_t base = (t * static_cast<std::int64_t>(num_heads) + h) * head_dim;
                 for (int pair = 0; pair < half_dim; ++pair) {
                     const float cos_v =
                         cache[static_cast<std::size_t>((pos * half_dim + pair) * 2) + 0];
@@ -85,8 +82,7 @@ void reference_rope(T* q, T* k, const int32_t* positions, const float* cache,
                     const float x0 = FloatTraits<T>::to_float(x[base + pair]);
                     const float x1 = FloatTraits<T>::to_float(x[base + half_dim + pair]);
                     x[base + pair] = FloatTraits<T>::from_float(x0 * cos_v - x1 * sin_v);
-                    x[base + half_dim + pair] =
-                        FloatTraits<T>::from_float(x1 * cos_v + x0 * sin_v);
+                    x[base + half_dim + pair] = FloatTraits<T>::from_float(x1 * cos_v + x0 * sin_v);
                 }
             }
         }
@@ -98,8 +94,8 @@ void reference_rope(T* q, T* k, const int32_t* positions, const float* cache,
 template <typename T>
 void run_rope_and_check(const std::vector<float>& host_q, const std::vector<float>& host_k,
                         const std::vector<int32_t>& positions, const std::vector<float>& cache,
-                        int num_q_heads, int num_kv_heads, std::int64_t head_dim,
-                        int rotary_dim, float tolerance) {
+                        int num_q_heads, int num_kv_heads, std::int64_t head_dim, int rotary_dim,
+                        float tolerance) {
     using Traits = FloatTraits<T>;
     const std::int64_t num_tokens = positions.size();
     const std::int64_t q_elems = static_cast<std::int64_t>(num_tokens) * num_q_heads * head_dim;
@@ -116,8 +112,8 @@ void run_rope_and_check(const std::vector<float>& host_q, const std::vector<floa
     for (std::size_t i = 0; i < host_k.size(); ++i) k_in[i] = Traits::from_float(host_k[i]);
     std::vector<T> q_expected = q_in;
     std::vector<T> k_expected = k_in;
-    reference_rope(q_expected.data(), k_expected.data(), positions.data(), cache.data(),
-                   num_tokens, num_q_heads, num_kv_heads, head_dim, rotary_dim);
+    reference_rope(q_expected.data(), k_expected.data(), positions.data(), cache.data(), num_tokens,
+                   num_q_heads, num_kv_heads, head_dim, rotary_dim);
 
     CudaMem q_mem(q_in.size() * sizeof(T));
     CudaMem k_mem(k_in.size() * sizeof(T));
@@ -147,10 +143,10 @@ void run_rope_and_check(const std::vector<float>& host_q, const std::vector<floa
     Tensor q_tensor(q_mem.ptr_, Traits::dtype, kCuda0, q_shape, q_stride, 3);
     Tensor k_tensor(k_mem.ptr_, Traits::dtype, kCuda0, k_shape, k_stride, 3);
     Tensor pos_tensor(pos_mem.ptr_, DType::kInt32, kCuda0, {num_tokens});
-    Tensor cache_tensor(cache_mem.ptr_, DType::kFloat32, kCuda0,
-                        {cache_max_position, half_dim, 2});
+    Tensor cache_tensor(cache_mem.ptr_, DType::kFloat32, kCuda0, {cache_max_position, half_dim, 2});
 
-    rope(&q_tensor, &k_tensor, pos_tensor, cache_tensor, rotary_dim, ExecutionContext{});
+    ASSERT_TRUE(
+        rope(&q_tensor, &k_tensor, pos_tensor, cache_tensor, rotary_dim, ExecutionContext{}));
     ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
 
     std::vector<T> host_q_out(q_in.size());
@@ -186,12 +182,10 @@ TEST(RopeTest, Fp32Basic) {
     const std::vector<int32_t> positions{0, 2, 5};
     const std::vector<float> cache = reference_cache(8, kRotaryDim, 10000.0f);
 
-    const std::vector<float> q =
-        make_input(kNumTokens * kNumQHeads * kHeadDim);
-    const std::vector<float> k =
-        make_input(kNumTokens * kNumKvHeads * kHeadDim);
-    run_rope_and_check<float>(q, k, positions, cache, kNumQHeads, kNumKvHeads, kHeadDim,
-                              kRotaryDim, kTolerance);
+    const std::vector<float> q = make_input(kNumTokens * kNumQHeads * kHeadDim);
+    const std::vector<float> k = make_input(kNumTokens * kNumKvHeads * kHeadDim);
+    run_rope_and_check<float>(q, k, positions, cache, kNumQHeads, kNumKvHeads, kHeadDim, kRotaryDim,
+                              kTolerance);
 }
 
 TEST(RopeTest, Fp32Gqa) {
@@ -204,12 +198,10 @@ TEST(RopeTest, Fp32Gqa) {
     const std::vector<int32_t> positions{0, 2, 5};
     const std::vector<float> cache = reference_cache(8, kRotaryDim, 10000.0f);
 
-    const std::vector<float> q =
-        make_input(kNumTokens * kNumQHeads * kHeadDim);
-    const std::vector<float> k =
-        make_input(kNumTokens * kNumKvHeads * kHeadDim);
-    run_rope_and_check<float>(q, k, positions, cache, kNumQHeads, kNumKvHeads, kHeadDim,
-                              kRotaryDim, kTolerance);
+    const std::vector<float> q = make_input(kNumTokens * kNumQHeads * kHeadDim);
+    const std::vector<float> k = make_input(kNumTokens * kNumKvHeads * kHeadDim);
+    run_rope_and_check<float>(q, k, positions, cache, kNumQHeads, kNumKvHeads, kHeadDim, kRotaryDim,
+                              kTolerance);
 }
 
 TEST(RopeTest, PartialRotary) {
@@ -222,12 +214,10 @@ TEST(RopeTest, PartialRotary) {
     const std::vector<int32_t> positions{1, 4};
     const std::vector<float> cache = reference_cache(6, kRotaryDim, 10000.0f);
 
-    const std::vector<float> q =
-        make_input(kNumTokens * kNumQHeads * kHeadDim);
-    const std::vector<float> k =
-        make_input(kNumTokens * kNumKvHeads * kHeadDim);
-    run_rope_and_check<float>(q, k, positions, cache, kNumQHeads, kNumKvHeads, kHeadDim,
-                              kRotaryDim, kTolerance);
+    const std::vector<float> q = make_input(kNumTokens * kNumQHeads * kHeadDim);
+    const std::vector<float> k = make_input(kNumTokens * kNumKvHeads * kHeadDim);
+    run_rope_and_check<float>(q, k, positions, cache, kNumQHeads, kNumKvHeads, kHeadDim, kRotaryDim,
+                              kTolerance);
 }
 
 TEST(RopeTest, NonContiguousPositions) {
@@ -242,8 +232,8 @@ TEST(RopeTest, NonContiguousPositions) {
 
     const std::vector<float> q = make_input(kNumTokens * kNumQHeads * kHeadDim);
     const std::vector<float> k = make_input(kNumTokens * kNumKvHeads * kHeadDim);
-    run_rope_and_check<float>(q, k, positions, cache, kNumQHeads, kNumKvHeads, kHeadDim,
-                              kRotaryDim, kTolerance);
+    run_rope_and_check<float>(q, k, positions, cache, kNumQHeads, kNumKvHeads, kHeadDim, kRotaryDim,
+                              kTolerance);
 }
 
 TEST(RopeTest, Bf16) {
@@ -256,12 +246,10 @@ TEST(RopeTest, Bf16) {
     const std::vector<int32_t> positions{0, 2, 5};
     const std::vector<float> cache = reference_cache(8, kRotaryDim, 10000.0f);
 
-    const std::vector<float> q =
-        make_input(kNumTokens * kNumQHeads * kHeadDim);
-    const std::vector<float> k =
-        make_input(kNumTokens * kNumKvHeads * kHeadDim);
-    run_rope_and_check<__nv_bfloat16>(q, k, positions, cache, kNumQHeads, kNumKvHeads,
-                                      kHeadDim, kRotaryDim, kTolerance);
+    const std::vector<float> q = make_input(kNumTokens * kNumQHeads * kHeadDim);
+    const std::vector<float> k = make_input(kNumTokens * kNumKvHeads * kHeadDim);
+    run_rope_and_check<__nv_bfloat16>(q, k, positions, cache, kNumQHeads, kNumKvHeads, kHeadDim,
+                                      kRotaryDim, kTolerance);
 }
 
 TEST(RopeTest, IntegratedCache) {
@@ -277,11 +265,36 @@ TEST(RopeTest, IntegratedCache) {
     const std::vector<float> q = make_input(kNumTokens * kNumQHeads * kHeadDim);
     const std::vector<float> k = make_input(kNumTokens * kNumKvHeads * kHeadDim);
 
-    const std::vector<float> gen_cache =
-        reference_cache(kMaxPosition, kRotaryDim, 10000.0f);
+    const std::vector<float> gen_cache = reference_cache(kMaxPosition, kRotaryDim, 10000.0f);
 
     run_rope_and_check<float>(q, k, positions, gen_cache, kNumQHeads, kNumKvHeads, kHeadDim,
                               kRotaryDim, kTolerance);
+}
+
+TEST(RopeTest, InvalidArgument) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor q_tensor(ptr, DType::kFloat32, kCuda0, {2, 1, 4});
+    Tensor k_tensor(ptr, DType::kFloat32, kCuda0, {1, 1, 4});
+    Tensor pos_tensor(ptr, DType::kInt32, kCuda0, {2});
+    Tensor cache_tensor(ptr, DType::kFloat32, kCuda0, {4, 2, 2});
+    auto result = rope(&q_tensor, &k_tensor, pos_tensor, cache_tensor, 4, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kInvalidArgument);
+}
+
+TEST(RopeTest, UnsupportedDtype) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor q_tensor(ptr, DType::kFloat16, kCuda0, {1, 1, 4});
+    Tensor k_tensor(ptr, DType::kFloat16, kCuda0, {1, 1, 4});
+    Tensor pos_tensor(ptr, DType::kInt32, kCuda0, {1});
+    Tensor cache_tensor(ptr, DType::kFloat32, kCuda0, {4, 2, 2});
+    auto result = rope(&q_tensor, &k_tensor, pos_tensor, cache_tensor, 4, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kUnsupported);
 }
 
 }  // namespace

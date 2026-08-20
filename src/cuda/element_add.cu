@@ -1,9 +1,10 @@
-#include <cassert>
+
+#include "ccop/ops/element_add.h"
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
 
-#include "ccop/ops/element_add.h"
+#include "ccop/cuda/error_cuda.h"
 
 namespace ccop {
 namespace {
@@ -36,22 +37,33 @@ __global__ void element_add_kernel(T* dst, const T* src, unsigned int n) {
 
 }  // namespace
 
-void element_add(Tensor* dst, const Tensor& src, const ExecutionContext& ctx) {
-    assert(dst != nullptr && dst->valid());
-    assert(src.valid());
-    assert(dst->rank() == 1 && dst->is_contiguous());
-    assert(src.rank() == 1 && src.is_contiguous());
-    assert(dst->dtype() == src.dtype());
-    assert(dst->shape(0) == src.shape(0));
-
+Result<void> element_add(Tensor* dst, const Tensor& src, const ExecutionContext& ctx) {
+    if (!(dst != nullptr && dst->valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(src.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(dst->rank() == 1 && dst->is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(src.rank() == 1 && src.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(dst->dtype() == src.dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(dst->shape(0) == src.shape(0))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     const unsigned int n = static_cast<unsigned int>(dst->shape(0));
-    assert(n > 0);
-
+    if (!(n > 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     const unsigned int block = 256;
     const unsigned int grid = (n + block - 1) / block;
     cudaStream_t s = static_cast<cudaStream_t>(ctx.stream);
     // 组合 dtype 分发：dst/src 同 dtype → kernel 模板实例。
-    // TODO(operator): 在下面每个 case 中补 launch。
     //   并行映射（与 kernel 注释一致）：
     //     block = 256（scalar 版每线程一个元素）；
     //     grid = ceil(n / block)。
@@ -64,13 +76,13 @@ void element_add(Tensor* dst, const Tensor& src, const ExecutionContext& ctx) {
             element_add_kernel<__nv_bfloat16>
                 <<<grid, block, 0, s>>>(static_cast<__nv_bfloat16*>(dst->data()),
                                         static_cast<const __nv_bfloat16*>(src.data()), n);
-            break;
+            return check_cuda_launch();
         case DType::kFloat32:
             element_add_kernel<float><<<grid, block, 0, s>>>(
                 static_cast<float*>(dst->data()), static_cast<const float*>(src.data()), n);
-            break;
+            return check_cuda_launch();
         default:
-            return;  // 不支持的 dtype
+            return std::unexpected(ErrorCode::kUnsupported);
     }
 }
 

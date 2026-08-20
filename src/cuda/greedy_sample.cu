@@ -1,47 +1,62 @@
 #include "ccop/ops/greedy_sample.h"
 
-#include <cassert>
 #include <cstdint>
 
 #include <cuda_runtime.h>
 
+#include "ccop/cuda/error_cuda.h"
+
 namespace ccop {
 namespace {
 
-// GreedySample kernel 声明（接口已定，函数体待实现）。
+// GreedySample kernel：scalar 版，每线程一行。
 // 无模板：logits 按采样上游约定固定 float32（不需要 dtype 分发）。
 // 第一阶段（正确性为先，scalar 版：每线程一行）。
 //
-// 数学形式（逐行 argmax）：
-//   tokens[t] = argmax_v logits[t][v]，平局取最小 v（严格 > 才更新）。
+// 数学形式（按 logits_indices 逐行 argmax）：
+//   row = logits_indices[b]
+//   若 0 <= row < num_tokens：
+//     tokens[b] = argmax_v logits[row][v]
+//   否则跳过（padding/无效请求），tokens[b] 保持原值。
+//   平局取最小 v（严格 > 才更新）。
 //
-// 数据布局（行主序连续）：
-//   logits: [num_tokens, vocab_size]，线性偏移 = t * vocab_size + v；
-//   tokens: [num_tokens] int32。
+// 数据布局（全部行主序连续）：
+//   logits: [num_tokens, vocab_size]，线性偏移 = row * vocab_size + v；
+//   logits_indices: [batch_size] int32，row = logits_indices[b]；
+//   tokens: [batch_size] int32。
 //
-// 并行映射：
-//   grid.x 与 block 内 threadIdx.x 一起平铺 num_tokens 行
-//   （block 向上取整，需越界守卫）；
-//   blockIdx.x/threadIdx.x → 行索引 t，每线程遍历该行全部 vocab_size 个
-//   元素并维护 argmax（初始可设 v = 0）。
+// 并行映射（batch 维度是输出维度）：
+//   block = 256，grid.x = ceil(batch_size / block)；
+//   b = blockIdx.x * blockDim.x + threadIdx.x。
+//   第一个守卫：b >= batch_size 的尾块线程直接 return。
+//   每个有效请求 b 读一次 row = logits_indices[b]，再遍历该 logits 行
+//   vocab_size 个元素并维护 argmax。
+//
+// 越界语义（两个独立守卫，不要混用 batch 与 logits 行两个维度）：
+//   - b 是 batch 维：只用于写 tokens[b] 和读 logits_indices[b]；
+//   - row 是 logits 行维：0 <= row < num_tokens 才采样；
+//     row < 0 或 row >= num_tokens 时直接 return，tokens[b] 保持原值。
 //
 // 数值注意：
 //   - 纯比较无算术：平局语义用严格 > 更新，保证保留最小索引；
-//   - logits 含 NaN 时行为未定义（调用方保证）；
-//   - 维度与索引统一 unsigned int（uint32 上限约 42.9 亿，覆盖
-//     32 头 × 100 万上下文 × head_dim 的目标场景）。
-__global__ void greedy_sample_kernel(const float* logits, int32_t* tokens, unsigned int num_tokens,
-                                     unsigned int vocab_size) {
+//   - logits 含 NaN 时行为未定义（调用方保证）。
+__global__ void greedy_sample_kernel(const float* logits, const int32_t* logits_indices,
+                                     int32_t* tokens, unsigned int batch_size,
+                                     unsigned int num_tokens, unsigned int vocab_size) {
     unsigned int tid = threadIdx.x + blockDim.x * blockIdx.x;
-    if (tid >= num_tokens) {
+    if (tid >= batch_size) {
+        return;
+    }
+    int r = logits_indices[tid];
+    if (r < 0 || r >= num_tokens) {
         return;
     }
     tokens[tid] = 0;
-    float v = logits[tid * vocab_size];
+    float max = logits[r * vocab_size];
     for (unsigned int i = 1; i < vocab_size; ++i) {
-        float tmp = logits[tid * vocab_size + i];
-        if (tmp > v) {
-            v = tmp;
+        float tmp = logits[r * vocab_size + i];
+        if (max < tmp) {
+            max = tmp;
             tokens[tid] = i;
         }
     }
@@ -49,33 +64,55 @@ __global__ void greedy_sample_kernel(const float* logits, int32_t* tokens, unsig
 
 }  // namespace
 
-void greedy_sample(const Tensor& logits, Tensor* tokens, const ExecutionContext& ctx) {
-    assert(logits.valid());
-    assert(logits.rank() == 2 && logits.is_contiguous());
-    assert(logits.dtype() == DType::kFloat32);
-    assert(tokens != nullptr && tokens->valid());
-    assert(tokens->rank() == 1 && tokens->is_contiguous());
-    assert(tokens->dtype() == DType::kInt32);
-
+Result<void> greedy_sample(const Tensor& logits, const Tensor& logits_indices, Tensor* tokens,
+                           const ExecutionContext& ctx) {
+    if (!(logits.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(logits.rank() == 2 && logits.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (logits.dtype() != DType::kFloat32) {
+        return std::unexpected(ErrorCode::kUnsupported);
+    }
+    if (!(logits_indices.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(logits_indices.rank() == 1 && logits_indices.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(logits_indices.dtype() == DType::kInt32)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(tokens != nullptr && tokens->valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(tokens->rank() == 1 && tokens->is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(tokens->dtype() == DType::kInt32)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     const unsigned int num_tokens = static_cast<unsigned int>(logits.shape(0));
     const unsigned int vocab_size = static_cast<unsigned int>(logits.shape(1));
-    assert(num_tokens > 0 && vocab_size > 0);
-    assert(tokens->shape(0) == static_cast<std::int64_t>(num_tokens));
+    const unsigned int batch_size = static_cast<unsigned int>(logits_indices.shape(0));
+    if (!(num_tokens > 0 && vocab_size > 0 && batch_size > 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(logits_indices.shape(0) == static_cast<std::int64_t>(batch_size))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(tokens->shape(0) == static_cast<std::int64_t>(batch_size))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
 
-    // TODO(operator): 补 launch（单 dtype：logits 固定 float32，无分发 switch）。
-    //   并行映射（与 kernel 注释一致）：
-    //     block = 256（scalar 版每线程一行）；
-    //     grid = ceil(num_tokens / block)。
-    //   调用要点：
-    //     stream 从 ctx.stream 取；logits/tokens 的裸指针从各自
-    //     Tensor::data() 解包并转成 kernel 参数类型；标量按签名顺序传
-    //     （num_tokens, vocab_size）。
     const unsigned int block = 256;
-    const unsigned int grid = (num_tokens - 1 + block) / block;
+    const unsigned int grid = (batch_size - 1 + block) / block;
     cudaStream_t s = static_cast<cudaStream_t>(ctx.stream);
     greedy_sample_kernel<<<grid, block, 0, s>>>(static_cast<const float*>(logits.data()),
-                                                static_cast<int32_t*>(tokens->data()), num_tokens,
-                                                vocab_size);
+                                                static_cast<const int32_t*>(logits_indices.data()),
+                                                static_cast<int32_t*>(tokens->data()), batch_size,
+                                                num_tokens, vocab_size);
+    return check_cuda_launch();
 }
-
 }  // namespace ccop

@@ -1,10 +1,11 @@
 #include "ccop/ops/write_kv_cache.h"
 
-#include <cassert>
 #include <cstdint>
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+
+#include "ccop/cuda/error_cuda.h"
 
 namespace ccop {
 namespace {
@@ -63,42 +64,85 @@ __global__ void write_kv_cache_kernel(const T* k_new, const T* v_new, T* k_cache
 
 }  // namespace
 
-void write_kv_cache(const Tensor& k_new, const Tensor& v_new, Tensor* k_cache, Tensor* v_cache,
-                    const Tensor& slot_mapping, const ExecutionContext& ctx) {
-    assert(k_new.valid() && v_new.valid());
-    assert(k_new.rank() == 3 && k_new.is_contiguous());
-    assert(v_new.rank() == 3 && v_new.is_contiguous());
-    assert(k_cache != nullptr && k_cache->valid());
-    assert(v_cache != nullptr && v_cache->valid());
-    assert(k_cache->rank() == 3 && k_cache->is_contiguous());
-    assert(v_cache->rank() == 3 && v_cache->is_contiguous());
-    assert(k_new.dtype() == v_new.dtype());
-    assert(k_new.dtype() == k_cache->dtype());
-    assert(k_new.dtype() == v_cache->dtype());
-
+Result<void> write_kv_cache(const Tensor& k_new, const Tensor& v_new, Tensor* k_cache,
+                            Tensor* v_cache, const Tensor& slot_mapping,
+                            const ExecutionContext& ctx) {
+    if (!(k_new.valid() && v_new.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k_new.rank() == 3 && k_new.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v_new.rank() == 3 && v_new.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k_cache != nullptr && k_cache->valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v_cache != nullptr && v_cache->valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k_cache->rank() == 3 && k_cache->is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v_cache->rank() == 3 && v_cache->is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k_new.dtype() == v_new.dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k_new.dtype() == k_cache->dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k_new.dtype() == v_cache->dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     const unsigned int num_tokens = static_cast<unsigned int>(k_new.shape(0));
     const unsigned int num_kv_heads = static_cast<unsigned int>(k_new.shape(1));
     const unsigned int head_dim = static_cast<unsigned int>(k_new.shape(2));
-    assert(num_tokens > 0 && num_kv_heads > 0 && head_dim > 0);
-    assert(v_new.shape(0) == static_cast<std::int64_t>(num_tokens));
-    assert(v_new.shape(1) == static_cast<std::int64_t>(num_kv_heads));
-    assert(v_new.shape(2) == static_cast<std::int64_t>(head_dim));
-
+    if (!(num_tokens > 0 && num_kv_heads > 0 && head_dim > 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v_new.shape(0) == static_cast<std::int64_t>(num_tokens))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v_new.shape(1) == static_cast<std::int64_t>(num_kv_heads))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v_new.shape(2) == static_cast<std::int64_t>(head_dim))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     const unsigned int num_slots = static_cast<unsigned int>(k_cache->shape(0));
-    assert(num_slots > 0);
-    assert(k_cache->shape(1) == static_cast<std::int64_t>(num_kv_heads));
-    assert(k_cache->shape(2) == static_cast<std::int64_t>(head_dim));
-    assert(v_cache->shape(0) == static_cast<std::int64_t>(num_slots));
-    assert(v_cache->shape(1) == static_cast<std::int64_t>(num_kv_heads));
-    assert(v_cache->shape(2) == static_cast<std::int64_t>(head_dim));
-
-    assert(slot_mapping.valid());
-    assert(slot_mapping.rank() == 1 && slot_mapping.is_contiguous());
-    assert(slot_mapping.dtype() == DType::kInt32);
-    assert(slot_mapping.shape(0) == static_cast<std::int64_t>(num_tokens));
-
-    // 组合 dtype 分发：k/v 四数组同 dtype → kernel 模板实例。
-    // TODO(operator): 在下面每个 case 中补 launch。
+    if (!(num_slots > 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k_cache->shape(1) == static_cast<std::int64_t>(num_kv_heads))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k_cache->shape(2) == static_cast<std::int64_t>(head_dim))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v_cache->shape(0) == static_cast<std::int64_t>(num_slots))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v_cache->shape(1) == static_cast<std::int64_t>(num_kv_heads))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v_cache->shape(2) == static_cast<std::int64_t>(head_dim))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(slot_mapping.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(slot_mapping.rank() == 1 && slot_mapping.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(slot_mapping.dtype() == DType::kInt32)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(slot_mapping.shape(0) == static_cast<std::int64_t>(num_tokens))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     //   并行映射（与 kernel 注释一致）：
     //     block = 256（scalar 版每线程一个 (h, d) 元素）；
     //     grid.x = ceil(num_kv_heads * head_dim / block)；
@@ -120,16 +164,16 @@ void write_kv_cache(const Tensor& k_new, const Tensor& v_new, Tensor* k_cache, T
                                         static_cast<__nv_bfloat16*>(v_cache->data()),
                                         static_cast<const int32_t*>(slot_mapping.data()),
                                         num_tokens, num_kv_heads, head_dim, num_slots);
-            break;
+            return check_cuda_launch();
         case DType::kFloat32:
             write_kv_cache_kernel<float><<<grid, block, 0, s>>>(
                 static_cast<const float*>(k_new.data()), static_cast<const float*>(v_new.data()),
                 static_cast<float*>(k_cache->data()), static_cast<float*>(v_cache->data()),
                 static_cast<const int32_t*>(slot_mapping.data()), num_tokens, num_kv_heads,
                 head_dim, num_slots);
-            break;
+            return check_cuda_launch();
         default:
-            return;  // 不支持的 dtype
+            return std::unexpected(ErrorCode::kUnsupported);
     }
 }
 

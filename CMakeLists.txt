@@ -25,11 +25,13 @@ find_package(CUDAToolkit REQUIRED)
 add_library(ccop src/tensor.cpp)
 target_include_directories(ccop PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(ccop PUBLIC cxx_std_23)
-target_link_libraries(ccop PUBLIC CUDA::cudart)
+target_compile_options(ccop PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-std=c++23>)
+target_link_libraries(ccop PUBLIC CUDA::cublas CUDA::cudart)
 
 if(CCOP_BACKEND STREQUAL "cuda")
     target_sources(ccop PRIVATE src/cuda/decode_attention.cu src/cuda/element_add.cu
-                                   src/cuda/embed.cu src/cuda/greedy_sample.cu
+                                   src/cuda/embed.cu src/cuda/gemm.cu
+                                   src/cuda/greedy_sample.cu
                                    src/cuda/naive_attention.cu src/cuda/prefill_attention.cu
                                    src/cuda/reduce.cu src/cuda/rms_norm.cu src/cuda/rope.cu
                                    src/cuda/silu_mul.cu src/cuda/softmax.cu

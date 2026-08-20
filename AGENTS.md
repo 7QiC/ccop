@@ -6,7 +6,7 @@ ccop 是一个独立的 C++23 CUDA 算子库，用于练习算子开发全流程
 
 ## 目录结构
 
-- `include/ccop/` — 公共接口：`dtype.h`（tag ↔ native ↔ enum 单一事实源）、`device.h`、`execution_context.h`（仅 stream）、`tensor.h`（纯视图）、`cuda/dtype_cuda.h`（仅 CUDA 编译单元包含）
+- `include/ccop/` — 公共接口：`dtype.h`（tag ↔ native ↔ enum 单一事实源）、`device.h`、`execution_context.h`（stream + 可选 blas handle）、`tensor.h`（纯视图）、`error.h`、`cuda/dtype_cuda.h` / `cuda/error_cuda.h`（仅 CUDA 编译单元包含）
 - `src/` — 通用实现（`tensor.cpp`）；后端特定实现放在 `src/<backend>/`（如 `src/cuda/`），由 `CCOP_BACKEND` 编译选项选择
 - `tests/` — GTest 单元测试（`test_<module>.cpp`），测试自带存储/allocator，不进入公共 API
 - `docs/superpowers/specs/2026-08-06-ccop-interface-design.md` — 接口施工图（历史版本，以实际代码为准）
@@ -24,8 +24,8 @@ ctest --test-dir build
 ## 架构原则
 
 - **Tensor 是纯视图**：host 元数据 + 裸 `data_ptr`，不拥有内存、无引用计数。显存所有权归框架侧 `Buffer`；Tensor 借用底层分配，不得活得比它久（`std::string_view` 风格）。没有 TensorView——Tensor 本身就是视图。
-- **算子库只管算**：不负责显存分配、不持有长期资源、不包含 allocator。kernel 直接操作裸指针 + 模板，零包装开销。
-- **Device 与执行上下文分离**：Tensor 携带 `Device`（数据在哪）；`ExecutionContext` 只含不透明 `stream` 句柄，由调用方传入。
+- **算子库只管算**：不负责显存分配、不持有长期资源、不包含 allocator。kernel 直接操作裸指针 + 模板，零包装开销。GEMM 当前封装 cuBLAS（handle 由调用方通过 ExecutionContext 提供），后续再替换为自研 kernel。
+- **Device 与执行上下文分离**：Tensor 携带 `Device`（数据在哪）；`ExecutionContext` 含不透明 `stream` 与可选 `blas_handle`（均由调用方传入，ccop 不拥有）。
 - **dtype 单一事实源**：tag → native → enum 映射各一份，`static_assert` 保证一致；host 头不依赖 CUDA，f16/bf16 的 native 类型只在 `cuda/dtype_cuda.h` 特化。
 - **低耦合**：ccop 不依赖 ccInfer 的任何头文件；ccInfer 通过 submodule 引用 `ccop::ccop`。
 

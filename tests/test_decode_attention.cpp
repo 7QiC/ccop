@@ -195,8 +195,8 @@ void run_and_check(const std::vector<float>& host_q, const std::vector<float>& h
         {static_cast<std::int64_t>(batch_size), static_cast<std::int64_t>(num_q_heads),
          static_cast<std::int64_t>(head_dim)});
 
-    decode_attention(q_tensor, k_cache_tensor, v_cache_tensor, table_tensor, lens_tensor,
-                     &out_tensor, scale, ExecutionContext{});
+    ASSERT_TRUE(decode_attention(q_tensor, k_cache_tensor, v_cache_tensor, table_tensor,
+                                 lens_tensor, &out_tensor, scale, ExecutionContext{}));
     ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
 
     std::vector<T> host_out(expected.size());
@@ -212,6 +212,16 @@ std::vector<float> make_values(std::size_t n, float base, float step) {
     std::vector<float> v(n);
     for (std::size_t i = 0; i < n; ++i) {
         v[i] = base + step * static_cast<float>(i % 13);
+    }
+    return v;
+}
+
+std::vector<float> make_lcg_values(std::size_t n, unsigned int seed) {
+    std::vector<float> v(n);
+    unsigned int s = seed;
+    for (std::size_t i = 0; i < n; ++i) {
+        s = s * 1103515245 + 12345;
+        v[i] = (static_cast<float>((s >> 16) & 0x7FFF) / 32768.0f - 1.0f) * 0.05f;
     }
     return v;
 }
@@ -244,6 +254,47 @@ TEST(DecodeAttentionTest, LargeScores) {
     const std::vector<float> k_cache(4 * 4 * 2 * 8, 10.0f);
     const std::vector<float> v_cache(4 * 4 * 2 * 8, 1.0f);
     run_and_check<float>(q, k_cache, v_cache, {0, 2, 1, -1}, {5, 3}, 2, 2, 2, 8, 4, 4, 1e-4f);
+}
+
+TEST(DecodeAttentionTest, Bf16RandomPagedGqa) {
+    // 对齐 ccInfer 旧 RandomPagedGQAMatchesCpuReference 覆盖：乱序物理块、
+    // 不同 context_len、BF16 GQA。
+    run_and_check<__nv_bfloat16>(make_lcg_values(2 * 8 * 64, 1),
+                                 make_lcg_values(3 * 16 * 2 * 64, 2),
+                                 make_lcg_values(3 * 16 * 2 * 64, 3), {2, 0, 1, 1, 2, -1}, {31, 17},
+                                 2, 8, 2, 64, 3, 16, 1e-2f);
+}
+
+TEST(DecodeAttentionTest, InvalidArgument) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor q_tensor(ptr, DType::kFloat32, kCuda0, {1, 3, 2});
+    Tensor k_cache_tensor(ptr, DType::kFloat32, kCuda0, {2, 1, 2, 2});
+    Tensor v_cache_tensor(ptr, DType::kFloat32, kCuda0, {2, 1, 2, 2});
+    Tensor table_tensor(ptr, DType::kInt32, kCuda0, {1, 2});
+    Tensor lens_tensor(ptr, DType::kInt32, kCuda0, {1});
+    Tensor out_tensor(ptr, DType::kFloat32, kCuda0, {1, 3, 2});
+    auto result = decode_attention(q_tensor, k_cache_tensor, v_cache_tensor, table_tensor,
+                                   lens_tensor, &out_tensor, 0.5f, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kInvalidArgument);
+}
+
+TEST(DecodeAttentionTest, UnsupportedDtype) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor q_tensor(ptr, DType::kFloat16, kCuda0, {1, 2, 2});
+    Tensor k_cache_tensor(ptr, DType::kFloat16, kCuda0, {2, 1, 2, 2});
+    Tensor v_cache_tensor(ptr, DType::kFloat16, kCuda0, {2, 1, 2, 2});
+    Tensor table_tensor(ptr, DType::kInt32, kCuda0, {1, 2});
+    Tensor lens_tensor(ptr, DType::kInt32, kCuda0, {1});
+    Tensor out_tensor(ptr, DType::kFloat16, kCuda0, {1, 2, 2});
+    auto result = decode_attention(q_tensor, k_cache_tensor, v_cache_tensor, table_tensor,
+                                   lens_tensor, &out_tensor, 0.5f, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kUnsupported);
 }
 
 }  // namespace

@@ -88,7 +88,7 @@ void run_and_check(const std::vector<float>& host_table, unsigned int vocab_size
         out_mem.ptr_, Traits::dtype, kCuda0,
         {static_cast<std::int64_t>(token_ids.size()), static_cast<std::int64_t>(d_model)});
 
-    embed(table_tensor, ids_tensor, &out_tensor, ExecutionContext{});
+    ASSERT_TRUE(embed(table_tensor, ids_tensor, &out_tensor, ExecutionContext{}));
     ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
 
     std::vector<T> host_out(expected.size());
@@ -126,6 +126,30 @@ TEST(EmbedTest, NonBlockMultiple) {
     // 总输出元素 9 * 32 = 288 非 block 整数倍：验证越界守卫。
     run_and_check<float>(make_values(32 * 32, -0.5f, 0.1f), 32, 32,
                          {0, 31, 5, 7, 12, 29, 3, 8, 17});
+}
+
+TEST(EmbedTest, InvalidArgument) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor table_tensor(ptr, DType::kFloat32, kCuda0, {4, 3});
+    Tensor ids_tensor(ptr, DType::kInt32, kCuda0, {2});
+    Tensor out_tensor(ptr, DType::kFloat32, kCuda0, {2, 4});
+    auto result = embed(table_tensor, ids_tensor, &out_tensor, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kInvalidArgument);
+}
+
+TEST(EmbedTest, UnsupportedDtype) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor table_tensor(ptr, DType::kFloat16, kCuda0, {4, 3});
+    Tensor ids_tensor(ptr, DType::kInt32, kCuda0, {2});
+    Tensor out_tensor(ptr, DType::kFloat16, kCuda0, {2, 3});
+    auto result = embed(table_tensor, ids_tensor, &out_tensor, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kUnsupported);
 }
 
 }  // namespace

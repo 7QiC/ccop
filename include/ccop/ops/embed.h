@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ccop/error.h"
 #include "ccop/execution_context.h"
 #include "ccop/tensor.h"
 
@@ -19,9 +20,10 @@ namespace ccop {
 // 越界行为未定义，不守卫——与 vLLM/HF 的 gather 语义一致）。
 // table 与 out 必须同 dtype（BF16 或 FP32）、各自连续。
 //
-// 算子只负责计算：参数校验用 assert 兜底，kernel 错误由调用方检查。
+// 算子只负责计算：参数错误返回 ErrorCode；kernel 错误映射后返回 ErrorCode。
 // 第一阶段：scalar 正确版，不做性能优化。
 // -----------------------------------------------------------------------------
-void embed(const Tensor& table, const Tensor& token_ids, Tensor* out, const ExecutionContext& ctx);
+Result<void> embed(const Tensor& table, const Tensor& token_ids, Tensor* out,
+                   const ExecutionContext& ctx);
 
 }  // namespace ccop

@@ -1,10 +1,11 @@
 #include "ccop/ops/split_qkv.h"
 
-#include <cassert>
-#include <cmath>
+#include <limits>
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+
+#include "ccop/cuda/error_cuda.h"
 
 namespace ccop {
 namespace {
@@ -69,36 +70,75 @@ __global__ void split_qkv_kernel(const T* qkv, T* q, T* k, T* v, unsigned int nu
 
 }  // namespace
 
-void split_qkv(const Tensor& qkv, Tensor* q, Tensor* k, Tensor* v, unsigned int num_q_heads,
-               unsigned int num_kv_heads, const ExecutionContext& ctx) {
-    assert(qkv.valid());
-    assert(qkv.rank() == 2 && qkv.is_contiguous());
-    assert(q != nullptr && q->valid());
-    assert(k != nullptr && k->valid());
-    assert(v != nullptr && v->valid());
-    assert(q->rank() == 3 && q->is_contiguous());
-    assert(k->rank() == 3 && k->is_contiguous());
-    assert(v->rank() == 3 && v->is_contiguous());
-    assert(qkv.dtype() == q->dtype());
-    assert(qkv.dtype() == k->dtype());
-    assert(qkv.dtype() == v->dtype());
-    assert(num_q_heads > 0 && num_kv_heads > 0);
-
-    const unsigned int num_tokens = static_cast<unsigned int>(qkv.shape(0));
-    const unsigned int head_dim = static_cast<unsigned int>(q->shape(2));
-    assert(num_tokens > 0 && head_dim > 0);
-    assert(qkv.shape(1) == static_cast<std::int64_t>(num_q_heads + 2 * num_kv_heads) * head_dim);
-    assert(q->shape(0) == static_cast<std::int64_t>(num_tokens));
-    assert(k->shape(0) == static_cast<std::int64_t>(num_tokens));
-    assert(v->shape(0) == static_cast<std::int64_t>(num_tokens));
-    assert(q->shape(1) == static_cast<std::int64_t>(num_q_heads));
-    assert(k->shape(1) == static_cast<std::int64_t>(num_kv_heads));
-    assert(v->shape(1) == static_cast<std::int64_t>(num_kv_heads));
-    assert(k->shape(2) == static_cast<std::int64_t>(head_dim));
-    assert(v->shape(2) == static_cast<std::int64_t>(head_dim));
-
-    // 组合 dtype 分发：qkv/q/k/v 同 dtype → kernel 模板实例。
-    // TODO(operator): 在下面每个 case 中补 launch。
+Result<void> split_qkv(const Tensor& qkv, Tensor* q, Tensor* k, Tensor* v,
+                       const ExecutionContext& ctx) {
+    if (!(qkv.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(qkv.rank() == 2 && qkv.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q != nullptr && q->valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k != nullptr && k->valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v != nullptr && v->valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q->rank() == 3 && q->is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k->rank() == 3 && k->is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v->rank() == 3 && v->is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(qkv.dtype() == q->dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(qkv.dtype() == k->dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(qkv.dtype() == v->dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    const std::int64_t num_tokens_64 = qkv.shape(0);
+    const std::int64_t num_q_heads_64 = q->shape(1);
+    const std::int64_t num_kv_heads_64 = k->shape(1);
+    const std::int64_t head_dim_64 = q->shape(2);
+    constexpr std::int64_t kMax = std::numeric_limits<std::int64_t>::max();
+    if (num_tokens_64 <= 0 || num_q_heads_64 <= 0 || num_kv_heads_64 <= 0 || head_dim_64 <= 0 ||
+        num_kv_heads_64 > (kMax - num_q_heads_64) / 2) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    const std::int64_t heads_sum = num_q_heads_64 + 2 * num_kv_heads_64;
+    if (head_dim_64 > kMax / heads_sum) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    const std::int64_t qkv_dim_64 = heads_sum * head_dim_64;
+    if (qkv.shape(1) != qkv_dim_64) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q->shape(0) == num_tokens_64 && k->shape(0) == num_tokens_64 &&
+          v->shape(0) == num_tokens_64)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v->shape(1) == num_kv_heads_64 && k->shape(2) == head_dim_64 &&
+          v->shape(2) == head_dim_64)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    constexpr std::uint64_t kMaxU32 = std::numeric_limits<unsigned int>::max();
+    if (static_cast<std::uint64_t>(num_tokens_64) > kMaxU32 ||
+        static_cast<std::uint64_t>(qkv_dim_64) > kMaxU32) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    const unsigned int num_tokens = static_cast<unsigned int>(num_tokens_64);
+    const unsigned int num_q_heads = static_cast<unsigned int>(num_q_heads_64);
+    const unsigned int num_kv_heads = static_cast<unsigned int>(num_kv_heads_64);
+    const unsigned int head_dim = static_cast<unsigned int>(head_dim_64);
     //   并行映射（与 kernel 注释一致，输入驱动）：
     //     block = 256（scalar 版每线程一个输入元素）；
     //     grid = ceil(num_tokens * qkv_dim / block)，qkv_dim =
@@ -107,7 +147,7 @@ void split_qkv(const Tensor& qkv, Tensor* q, Tensor* k, Tensor* v, unsigned int 
     //     stream 从 ctx.stream 取；qkv/q/k/v 的裸指针从各自 Tensor::data()
     //     解包并转成 kernel 参数类型；模板参数 T 按 dtype 取
     //     __nv_bfloat16（kBFloat16）或 float（kFloat32）；标量按签名顺序传。
-    const unsigned int qkv_dim = (num_q_heads + 2 * num_kv_heads) * head_dim;
+    const unsigned int qkv_dim = static_cast<unsigned int>(qkv_dim_64);
     const unsigned int block = 256;
     const unsigned int grid = (num_tokens * qkv_dim + block - 1) / block;
     cudaStream_t s = static_cast<cudaStream_t>(ctx.stream);
@@ -118,15 +158,15 @@ void split_qkv(const Tensor& qkv, Tensor* q, Tensor* k, Tensor* v, unsigned int 
                 static_cast<__nv_bfloat16*>(q->data()), static_cast<__nv_bfloat16*>(k->data()),
                 static_cast<__nv_bfloat16*>(v->data()), num_tokens, num_q_heads, num_kv_heads,
                 head_dim);
-            break;
+            return check_cuda_launch();
         case DType::kFloat32:
             split_qkv_kernel<float><<<grid, block, 0, s>>>(
                 static_cast<const float*>(qkv.data()), static_cast<float*>(q->data()),
                 static_cast<float*>(k->data()), static_cast<float*>(v->data()), num_tokens,
                 num_q_heads, num_kv_heads, head_dim);
-            break;
+            return check_cuda_launch();
         default:
-            return;  // 不支持的 dtype
+            return std::unexpected(ErrorCode::kUnsupported);
     }
 }
 

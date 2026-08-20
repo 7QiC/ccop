@@ -1,3 +1,5 @@
+#include "ccop/ops/silu_mul.h"
+
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -6,7 +8,6 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
-#include "ccop/ops/silu_mul.h"
 #include "ccop/tensor.h"
 
 namespace ccop {
@@ -86,7 +87,7 @@ void run_and_check(const std::vector<float>& host_gate, const std::vector<float>
     Tensor up_tensor(up_mem.ptr_, Traits::dtype, kCuda0, {n});
     Tensor out_tensor(out_mem.ptr_, Traits::dtype, kCuda0, {n});
 
-    silu_mul(&out_tensor, gate_tensor, up_tensor, ExecutionContext{});
+    ASSERT_TRUE(silu_mul(&out_tensor, gate_tensor, up_tensor, ExecutionContext{}));
     ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
 
     std::vector<T> host_out(gate.size());
@@ -129,6 +130,30 @@ TEST(SiluMulTest, LargeNegativeGate) {
     const std::vector<float> gate = make_values(8, -20.0f, 1.0f);
     const std::vector<float> up = make_values(8, 1.0f, 0.25f);
     run_and_check<float>(gate, up, 1e-4f);
+}
+
+TEST(SiluMulTest, InvalidArgument) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor gate_tensor(ptr, DType::kFloat32, kCuda0, {4});
+    Tensor up_tensor(ptr, DType::kFloat32, kCuda0, {3});
+    Tensor out_tensor(ptr, DType::kFloat32, kCuda0, {4});
+    auto result = silu_mul(&out_tensor, gate_tensor, up_tensor, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kInvalidArgument);
+}
+
+TEST(SiluMulTest, UnsupportedDtype) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor gate_tensor(ptr, DType::kFloat16, kCuda0, {4});
+    Tensor up_tensor(ptr, DType::kFloat16, kCuda0, {4});
+    Tensor out_tensor(ptr, DType::kFloat16, kCuda0, {4});
+    auto result = silu_mul(&out_tensor, gate_tensor, up_tensor, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kUnsupported);
 }
 
 }  // namespace

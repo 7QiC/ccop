@@ -111,8 +111,7 @@ void run_and_check(unsigned int num_tokens, unsigned int num_q_heads, unsigned i
                     {static_cast<std::int64_t>(num_tokens), static_cast<std::int64_t>(num_kv_heads),
                      static_cast<std::int64_t>(head_dim)});
 
-    split_qkv(qkv_tensor, &q_tensor, &k_tensor, &v_tensor, num_q_heads, num_kv_heads,
-              ExecutionContext{});
+    ASSERT_TRUE(split_qkv(qkv_tensor, &q_tensor, &k_tensor, &v_tensor, ExecutionContext{}));
     ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
 
     std::vector<T> host_q(expected_q.size());
@@ -150,6 +149,32 @@ TEST(SplitQkvTest, HeadDimOne) { run_and_check<float>(3, 2, 1, 1); }
 TEST(SplitQkvTest, NonBlockMultiple) {
     // qkv 总元素数 7 * 64 = 448 非 block 整数倍：验证越界守卫。
     run_and_check<float>(7, 4, 2, 8);
+}
+
+TEST(SplitQkvTest, InvalidArgument) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor qkv_tensor(ptr, DType::kFloat32, kCuda0, {1, 12});
+    Tensor q_tensor(ptr, DType::kFloat32, kCuda0, {1, 3, 2});
+    Tensor k_tensor(ptr, DType::kFloat32, kCuda0, {1, 2, 2});
+    Tensor v_tensor(ptr, DType::kFloat32, kCuda0, {1, 2, 2});
+    auto result = split_qkv(qkv_tensor, &q_tensor, &k_tensor, &v_tensor, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kInvalidArgument);
+}
+
+TEST(SplitQkvTest, UnsupportedDtype) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor qkv_tensor(ptr, DType::kFloat16, kCuda0, {1, 12});
+    Tensor q_tensor(ptr, DType::kFloat16, kCuda0, {1, 2, 2});
+    Tensor k_tensor(ptr, DType::kFloat16, kCuda0, {1, 2, 2});
+    Tensor v_tensor(ptr, DType::kFloat16, kCuda0, {1, 2, 2});
+    auto result = split_qkv(qkv_tensor, &q_tensor, &k_tensor, &v_tensor, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kUnsupported);
 }
 
 }  // namespace

@@ -1,10 +1,11 @@
 #include "ccop/ops/decode_attention.h"
 
-#include <cassert>
 #include <cstdint>
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+
+#include "ccop/cuda/error_cuda.h"
 
 namespace ccop {
 namespace {
@@ -112,52 +113,108 @@ __global__ void decode_attention_kernel(const T* q, const T* k_cache, const T* v
 
 }  // namespace
 
-void decode_attention(const Tensor& q, const Tensor& k_cache, const Tensor& v_cache,
-                      const Tensor& block_table, const Tensor& context_lens, Tensor* out,
-                      float scale, const ExecutionContext& ctx) {
-    assert(q.valid() && k_cache.valid() && v_cache.valid());
-    assert(q.rank() == 3 && q.is_contiguous());
-    assert(k_cache.rank() == 4 && k_cache.is_contiguous());
-    assert(v_cache.rank() == 4 && v_cache.is_contiguous());
-    assert(out != nullptr && out->valid());
-    assert(out->rank() == 3 && out->is_contiguous());
-    assert(q.dtype() == k_cache.dtype());
-    assert(q.dtype() == v_cache.dtype());
-    assert(q.dtype() == out->dtype());
-    assert(scale > 0.0f);
-
+Result<void> decode_attention(const Tensor& q, const Tensor& k_cache, const Tensor& v_cache,
+                              const Tensor& block_table, const Tensor& context_lens, Tensor* out,
+                              float scale, const ExecutionContext& ctx) {
+    if (!(q.valid() && k_cache.valid() && v_cache.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q.rank() == 3 && q.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k_cache.rank() == 4 && k_cache.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v_cache.rank() == 4 && v_cache.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out != nullptr && out->valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->rank() == 3 && out->is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q.dtype() == k_cache.dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q.dtype() == v_cache.dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q.dtype() == out->dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(scale > 0.0f)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     const unsigned int batch_size = static_cast<unsigned int>(q.shape(0));
     const unsigned int num_q_heads = static_cast<unsigned int>(q.shape(1));
     const unsigned int num_kv_heads = static_cast<unsigned int>(k_cache.shape(2));
     const unsigned int head_dim = static_cast<unsigned int>(q.shape(2));
     const unsigned int block_size = static_cast<unsigned int>(k_cache.shape(1));
-    assert(batch_size > 0 && num_q_heads > 0 && num_kv_heads > 0 && head_dim > 0);
-    assert(block_size > 0);
-    assert(num_q_heads % num_kv_heads == 0);  // GQA：q 头按组共享 kv 头
-    assert(k_cache.shape(0) > 0);             // num_blocks
-    assert(k_cache.shape(3) == static_cast<std::int64_t>(head_dim));
-    assert(v_cache.shape(0) == k_cache.shape(0));
-    assert(v_cache.shape(1) == static_cast<std::int64_t>(block_size));
-    assert(v_cache.shape(2) == static_cast<std::int64_t>(num_kv_heads));
-    assert(v_cache.shape(3) == static_cast<std::int64_t>(head_dim));
-    assert(out->shape(0) == static_cast<std::int64_t>(batch_size));
-    assert(out->shape(1) == static_cast<std::int64_t>(num_q_heads));
-    assert(out->shape(2) == static_cast<std::int64_t>(head_dim));
-
-    assert(block_table.valid());
-    assert(block_table.rank() == 2 && block_table.is_contiguous());
-    assert(block_table.dtype() == DType::kInt32);
-    assert(block_table.shape(0) == static_cast<std::int64_t>(batch_size));
+    if (!(batch_size > 0 && num_q_heads > 0 && num_kv_heads > 0 && head_dim > 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(block_size > 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(num_q_heads % num_kv_heads == 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k_cache.shape(0) > 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k_cache.shape(3) == static_cast<std::int64_t>(head_dim))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v_cache.shape(0) == k_cache.shape(0))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v_cache.shape(1) == static_cast<std::int64_t>(block_size))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v_cache.shape(2) == static_cast<std::int64_t>(num_kv_heads))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v_cache.shape(3) == static_cast<std::int64_t>(head_dim))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->shape(0) == static_cast<std::int64_t>(batch_size))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->shape(1) == static_cast<std::int64_t>(num_q_heads))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->shape(2) == static_cast<std::int64_t>(head_dim))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(block_table.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(block_table.rank() == 2 && block_table.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(block_table.dtype() == DType::kInt32)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(block_table.shape(0) == static_cast<std::int64_t>(batch_size))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     const unsigned int max_blocks_per_req = static_cast<unsigned int>(block_table.shape(1));
-    assert(max_blocks_per_req > 0);
-
-    assert(context_lens.valid());
-    assert(context_lens.rank() == 1 && context_lens.is_contiguous());
-    assert(context_lens.dtype() == DType::kInt32);
-    assert(context_lens.shape(0) == static_cast<std::int64_t>(batch_size));
-
-    // 组合 dtype 分发：q/k_cache/v_cache/out 同 dtype → kernel 模板实例。
-    // TODO(operator): 在下面每个 case 中补 launch。
+    if (!(max_blocks_per_req > 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(context_lens.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(context_lens.rank() == 1 && context_lens.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(context_lens.dtype() == DType::kInt32)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(context_lens.shape(0) == static_cast<std::int64_t>(batch_size))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     //   并行映射（与 kernel 注释一致）：
     //     block = 256（scalar 版每线程一个输出行）；
     //     grid = ceil(batch_size * num_q_heads / block)。
@@ -180,7 +237,7 @@ void decode_attention(const Tensor& q, const Tensor& k_cache, const Tensor& v_ca
                 static_cast<const int32_t*>(context_lens.data()),
                 static_cast<__nv_bfloat16*>(out->data()), scale, batch_size, num_q_heads,
                 num_kv_heads, head_dim, block_size, max_blocks_per_req);
-            break;
+            return check_cuda_launch();
         case DType::kFloat32:
             decode_attention_kernel<float><<<grid, block, 0, s>>>(
                 static_cast<const float*>(q.data()), static_cast<const float*>(k_cache.data()),
@@ -189,9 +246,9 @@ void decode_attention(const Tensor& q, const Tensor& k_cache, const Tensor& v_ca
                 static_cast<const int32_t*>(context_lens.data()), static_cast<float*>(out->data()),
                 scale, batch_size, num_q_heads, num_kv_heads, head_dim, block_size,
                 max_blocks_per_req);
-            break;
+            return check_cuda_launch();
         default:
-            return;  // 不支持的 dtype
+            return std::unexpected(ErrorCode::kUnsupported);
     }
 }
 

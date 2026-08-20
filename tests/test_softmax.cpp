@@ -1,3 +1,5 @@
+#include "ccop/ops/softmax.h"
+
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -6,7 +8,6 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
-#include "ccop/ops/softmax.h"
 #include "ccop/tensor.h"
 
 namespace ccop {
@@ -52,13 +53,13 @@ std::vector<T> reference_softmax(const std::vector<T>& input, unsigned int rows,
     for (unsigned int i = 0; i < rows; ++i) {
         float max_v = Traits::to_float(input[static_cast<std::size_t>(i) * cols]);
         for (unsigned int j = 1; j < cols; ++j) {
-            max_v = std::max(max_v,
-                             Traits::to_float(input[static_cast<std::size_t>(i) * cols + j]));
+            max_v =
+                std::max(max_v, Traits::to_float(input[static_cast<std::size_t>(i) * cols + j]));
         }
         float sum = 0.0f;
         for (unsigned int j = 0; j < cols; ++j) {
-            sum += std::exp(Traits::to_float(input[static_cast<std::size_t>(i) * cols + j]) -
-                            max_v);
+            sum +=
+                std::exp(Traits::to_float(input[static_cast<std::size_t>(i) * cols + j]) - max_v);
         }
         for (unsigned int j = 0; j < cols; ++j) {
             const float v = Traits::to_float(input[static_cast<std::size_t>(i) * cols + j]);
@@ -93,7 +94,7 @@ void run_and_check(const std::vector<float>& host_input, unsigned int rows, unsi
     Tensor out_tensor(out_mem.ptr_, Traits::dtype, kCuda0,
                       {static_cast<std::int64_t>(rows), static_cast<std::int64_t>(cols)});
 
-    softmax(&out_tensor, input_tensor, ExecutionContext{});
+    ASSERT_TRUE(softmax(&out_tensor, input_tensor, ExecutionContext{}));
     ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
 
     std::vector<T> host_out(input.size());
@@ -149,6 +150,28 @@ TEST(SoftmaxTest, AllNegativeLargeValues) {
     // 否则 exp(-110) 下溢为 0、sum=0 → 0/0=NaN。
     const std::vector<float> input{-110.0f, -120.0f};
     run_and_check<float>(input, 1, 2, 1e-5f);
+}
+
+TEST(SoftmaxTest, InvalidArgument) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor in_tensor(ptr, DType::kFloat32, kCuda0, {2, 4});
+    Tensor out_tensor(ptr, DType::kFloat32, kCuda0, {2, 3});
+    auto result = softmax(&out_tensor, in_tensor, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kInvalidArgument);
+}
+
+TEST(SoftmaxTest, UnsupportedDtype) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor in_tensor(ptr, DType::kFloat16, kCuda0, {2, 4});
+    Tensor out_tensor(ptr, DType::kFloat16, kCuda0, {2, 4});
+    auto result = softmax(&out_tensor, in_tensor, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kUnsupported);
 }
 
 }  // namespace

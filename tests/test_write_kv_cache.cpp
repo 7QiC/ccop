@@ -137,8 +137,8 @@ void run_and_check(const std::vector<float>& host_k_new, const std::vector<float
     Tensor mapping_tensor(mapping_mem.ptr_, DType::kInt32, kCuda0,
                           {static_cast<std::int64_t>(num_tokens)});
 
-    write_kv_cache(k_new_tensor, v_new_tensor, &k_cache_tensor, &v_cache_tensor, mapping_tensor,
-                   ExecutionContext{});
+    ASSERT_TRUE(write_kv_cache(k_new_tensor, v_new_tensor, &k_cache_tensor, &v_cache_tensor,
+                               mapping_tensor, ExecutionContext{}));
     ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
 
     std::vector<T> host_k_out(expected_k.size());
@@ -196,6 +196,36 @@ TEST(WriteKvCacheTest, HeadDimOne) {
     const std::vector<float> k_new = make_values(3 * 2 * 1, -2.0f, 0.5f);
     const std::vector<float> v_new = make_values(3 * 2 * 1, 2.0f, -0.5f);
     run_and_check<float>(k_new, v_new, {0, 2, 1}, 2, 1, 3);
+}
+
+TEST(WriteKvCacheTest, InvalidArgument) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor k_new_tensor(ptr, DType::kFloat32, kCuda0, {2, 1, 2});
+    Tensor v_new_tensor(ptr, DType::kFloat32, kCuda0, {2, 1, 2});
+    Tensor k_cache_tensor(ptr, DType::kFloat32, kCuda0, {4, 1, 2});
+    Tensor v_cache_tensor(ptr, DType::kFloat32, kCuda0, {4, 1, 2});
+    Tensor mapping_tensor(ptr, DType::kInt32, kCuda0, {3});
+    auto result = write_kv_cache(k_new_tensor, v_new_tensor, &k_cache_tensor, &v_cache_tensor,
+                                 mapping_tensor, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kInvalidArgument);
+}
+
+TEST(WriteKvCacheTest, UnsupportedDtype) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor k_new_tensor(ptr, DType::kFloat16, kCuda0, {2, 1, 2});
+    Tensor v_new_tensor(ptr, DType::kFloat16, kCuda0, {2, 1, 2});
+    Tensor k_cache_tensor(ptr, DType::kFloat16, kCuda0, {4, 1, 2});
+    Tensor v_cache_tensor(ptr, DType::kFloat16, kCuda0, {4, 1, 2});
+    Tensor mapping_tensor(ptr, DType::kInt32, kCuda0, {2});
+    auto result = write_kv_cache(k_new_tensor, v_new_tensor, &k_cache_tensor, &v_cache_tensor,
+                                 mapping_tensor, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kUnsupported);
 }
 
 }  // namespace

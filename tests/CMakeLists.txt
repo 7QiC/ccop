@@ -12,6 +12,7 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 foreach(test_name IN ITEMS test_dtype test_device test_tensor test_reduce test_rms_norm test_rope
+                        test_gemm
                         test_silu_mul test_softmax test_element_add test_split_qkv
                         test_write_kv_cache test_naive_attention test_embed
                         test_greedy_sample test_decode_attention test_prefill_attention)

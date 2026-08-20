@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ccop/error.h"
 #include "ccop/execution_context.h"
 #include "ccop/tensor.h"
 
@@ -32,11 +33,11 @@ namespace ccop {
 // 块号在 [0, num_blocks) 内（其余对齐行内容任意）；context_lens 非负。
 // num_q_heads 须为 num_kv_heads 的整数倍。
 //
-// 算子只负责计算：参数校验用 assert 兜底，kernel 错误由调用方检查。
+// 算子只负责计算：参数错误返回 ErrorCode；kernel 错误映射后返回 ErrorCode。
 // 第一阶段：scalar 正确版（每线程一个 (b, qh) 输出行），不做性能优化。
 // -----------------------------------------------------------------------------
-void decode_attention(const Tensor& q, const Tensor& k_cache, const Tensor& v_cache,
-                      const Tensor& block_table, const Tensor& context_lens, Tensor* out,
-                      float scale, const ExecutionContext& ctx);
+Result<void> decode_attention(const Tensor& q, const Tensor& k_cache, const Tensor& v_cache,
+                              const Tensor& block_table, const Tensor& context_lens, Tensor* out,
+                              float scale, const ExecutionContext& ctx);
 
 }  // namespace ccop

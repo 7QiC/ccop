@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "ccop/error.h"
 #include "ccop/execution_context.h"
 #include "ccop/tensor.h"
 
@@ -26,10 +27,10 @@ namespace ccop {
 // q 与 k 必须同 dtype（BF16 或 FP32）；positions 越界（< 0 或 >=
 // rope_cache.shape(0)）的元素不写入（kernel 内守卫，host 无法检查 device 数据）。
 //
-// 算子只负责计算：参数校验用 assert 兜底，kernel 错误由调用方检查。
+// 算子只负责计算：参数错误返回 ErrorCode；kernel 错误映射后返回 ErrorCode。
 // 第一阶段：scalar 正确版；bf162 fast path 留后续优化。
 // -----------------------------------------------------------------------------
-void rope(Tensor* q, Tensor* k, const Tensor& positions, const Tensor& rope_cache,
-          unsigned int rotary_dim, const ExecutionContext& ctx);
+Result<void> rope(Tensor* q, Tensor* k, const Tensor& positions, const Tensor& rope_cache,
+                  unsigned int rotary_dim, const ExecutionContext& ctx);
 
 }  // namespace ccop

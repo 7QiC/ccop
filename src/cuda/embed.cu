@@ -1,10 +1,11 @@
 #include "ccop/ops/embed.h"
 
-#include <cassert>
 #include <cstdint>
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+
+#include "ccop/cuda/error_cuda.h"
 
 namespace ccop {
 namespace {
@@ -47,26 +48,46 @@ __global__ void embed_kernel(const T* table, const int32_t* token_ids, T* out,
 
 }  // namespace
 
-void embed(const Tensor& table, const Tensor& token_ids, Tensor* out, const ExecutionContext& ctx) {
-    assert(table.valid());
-    assert(table.rank() == 2 && table.is_contiguous());
-    assert(out != nullptr && out->valid());
-    assert(out->rank() == 2 && out->is_contiguous());
-    assert(out->dtype() == table.dtype());
-
+Result<void> embed(const Tensor& table, const Tensor& token_ids, Tensor* out,
+                   const ExecutionContext& ctx) {
+    if (!(table.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(table.rank() == 2 && table.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out != nullptr && out->valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->rank() == 2 && out->is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->dtype() == table.dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     const unsigned int num_tokens = static_cast<unsigned int>(out->shape(0));
     const unsigned int d_model = static_cast<unsigned int>(table.shape(1));
-    assert(num_tokens > 0 && d_model > 0);
-    assert(table.shape(0) > 0);  // vocab_size
-    assert(out->shape(1) == static_cast<std::int64_t>(d_model));
-
-    assert(token_ids.valid());
-    assert(token_ids.rank() == 1 && token_ids.is_contiguous());
-    assert(token_ids.dtype() == DType::kInt32);
-    assert(token_ids.shape(0) == static_cast<std::int64_t>(num_tokens));
-
-    // 组合 dtype 分发：table/out 同 dtype → kernel 模板实例。
-    // TODO(operator): 在下面每个 case 中补 launch。
+    if (!(num_tokens > 0 && d_model > 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(table.shape(0) > 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->shape(1) == static_cast<std::int64_t>(d_model))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(token_ids.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(token_ids.rank() == 1 && token_ids.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(token_ids.dtype() == DType::kInt32)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(token_ids.shape(0) == static_cast<std::int64_t>(num_tokens))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     //   并行映射（与 kernel 注释一致，输出驱动）：
     //     block = 256（scalar 版每线程一个输出元素）；
     //     grid = ceil(num_tokens * d_model / block)。
@@ -85,15 +106,15 @@ void embed(const Tensor& table, const Tensor& token_ids, Tensor* out, const Exec
                 static_cast<const __nv_bfloat16*>(table.data()),
                 static_cast<const int32_t*>(token_ids.data()),
                 static_cast<__nv_bfloat16*>(out->data()), num_tokens, d_model);
-            break;
+            return check_cuda_launch();
         case DType::kFloat32:
             embed_kernel<float>
                 <<<grid, block, 0, s>>>(static_cast<const float*>(table.data()),
                                         static_cast<const int32_t*>(token_ids.data()),
                                         static_cast<float*>(out->data()), num_tokens, d_model);
-            break;
+            return check_cuda_launch();
         default:
-            return;  // 不支持的 dtype
+            return std::unexpected(ErrorCode::kUnsupported);
     }
 }
 

@@ -46,7 +46,7 @@ struct FloatTraits<__nv_bfloat16> {
     static float to_float(__nv_bfloat16 v) { return __bfloat162float(v); }
 };
 
-// Host reference：naive attention（float 域、数值稳定 softmax），输入为 dtype 精确值。
+// Host reference：causal naive attention（float 域、数值稳定 softmax），输入为 dtype 精确值。
 template <typename T>
 std::vector<T> reference_naive_attention(const std::vector<T>& q, const std::vector<T>& k,
                                          const std::vector<T>& v, float scale,
@@ -60,7 +60,7 @@ std::vector<T> reference_naive_attention(const std::vector<T>& q, const std::vec
             const unsigned int kv = qh / group;
             std::vector<float> score(num_tokens);
             float m = -std::numeric_limits<float>::infinity();
-            for (unsigned int s = 0; s < num_tokens; ++s) {
+            for (unsigned int s = 0; s <= t; ++s) {
                 float acc = 0.0f;
                 for (unsigned int d = 0; d < head_dim; ++d) {
                     acc += Traits::to_float(
@@ -72,12 +72,12 @@ std::vector<T> reference_naive_attention(const std::vector<T>& q, const std::vec
                 m = std::max(m, score[s]);
             }
             float l = 0.0f;
-            for (unsigned int s = 0; s < num_tokens; ++s) {
+            for (unsigned int s = 0; s <= t; ++s) {
                 l += std::exp(score[s] - m);
             }
             for (unsigned int d = 0; d < head_dim; ++d) {
                 float acc = 0.0f;
-                for (unsigned int s = 0; s < num_tokens; ++s) {
+                for (unsigned int s = 0; s <= t; ++s) {
                     acc += std::exp(score[s] - m) / l *
                            Traits::to_float(
                                v[(static_cast<std::size_t>(s) * num_kv_heads + kv) * head_dim + d]);
@@ -142,7 +142,8 @@ void run_and_check(const std::vector<float>& host_q, const std::vector<float>& h
         {static_cast<std::int64_t>(num_tokens), static_cast<std::int64_t>(num_q_heads),
          static_cast<std::int64_t>(head_dim)});
 
-    naive_attention(q_tensor, k_tensor, v_tensor, &out_tensor, scale, ExecutionContext{});
+    ASSERT_TRUE(
+        naive_attention(q_tensor, k_tensor, v_tensor, &out_tensor, scale, ExecutionContext{}));
     ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
 
     std::vector<T> host_out(expected.size());
@@ -191,6 +192,34 @@ TEST(NaiveAttentionTest, LargeScores) {
     const std::vector<float> k(2 * 2 * 8, 10.0f);
     const std::vector<float> v(2 * 2 * 8, 1.0f);
     run_and_check<float>(q, k, v, 2, 2, 2, 8, 1e-4f);
+}
+
+TEST(NaiveAttentionTest, InvalidArgument) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor q_tensor(ptr, DType::kFloat32, kCuda0, {1, 3, 2});
+    Tensor k_tensor(ptr, DType::kFloat32, kCuda0, {1, 2, 2});
+    Tensor v_tensor(ptr, DType::kFloat32, kCuda0, {1, 2, 2});
+    Tensor out_tensor(ptr, DType::kFloat32, kCuda0, {1, 3, 2});
+    auto result =
+        naive_attention(q_tensor, k_tensor, v_tensor, &out_tensor, 0.5f, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kInvalidArgument);
+}
+
+TEST(NaiveAttentionTest, UnsupportedDtype) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor q_tensor(ptr, DType::kFloat16, kCuda0, {1, 2, 2});
+    Tensor k_tensor(ptr, DType::kFloat16, kCuda0, {1, 1, 2});
+    Tensor v_tensor(ptr, DType::kFloat16, kCuda0, {1, 1, 2});
+    Tensor out_tensor(ptr, DType::kFloat16, kCuda0, {1, 2, 2});
+    auto result =
+        naive_attention(q_tensor, k_tensor, v_tensor, &out_tensor, 0.5f, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kUnsupported);
 }
 
 }  // namespace

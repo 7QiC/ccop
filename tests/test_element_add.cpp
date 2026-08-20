@@ -1,3 +1,5 @@
+#include "ccop/ops/element_add.h"
+
 #include <cstdint>
 #include <vector>
 
@@ -5,7 +7,6 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
-#include "ccop/ops/element_add.h"
 #include "ccop/tensor.h"
 
 namespace ccop {
@@ -80,7 +81,7 @@ void run_and_check(const std::vector<float>& host_dst0, const std::vector<float>
     Tensor dst_tensor(dst_mem.ptr_, Traits::dtype, kCuda0, {n});
     Tensor src_tensor(src_mem.ptr_, Traits::dtype, kCuda0, {n});
 
-    element_add(&dst_tensor, src_tensor, ExecutionContext{});
+    ASSERT_TRUE(element_add(&dst_tensor, src_tensor, ExecutionContext{}));
     ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
 
     std::vector<T> host_out(dst0.size());
@@ -119,6 +120,28 @@ TEST(ElementAddTest, NonBlockMultiple) {
     const std::vector<float> dst0 = make_values(1000, -1.0f, 0.1f);
     const std::vector<float> src = make_values(1000, 0.5f, -0.05f);
     run_and_check<float>(dst0, src, 1e-5f);
+}
+
+TEST(ElementAddTest, InvalidArgument) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor dst_tensor(ptr, DType::kFloat32, kCuda0, {4});
+    Tensor src_tensor(ptr, DType::kFloat32, kCuda0, {3});
+    auto result = element_add(&dst_tensor, src_tensor, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kInvalidArgument);
+}
+
+TEST(ElementAddTest, UnsupportedDtype) {
+    std::vector<float> storage(64);
+    void* ptr = storage.data();
+    ASSERT_NE(ptr, nullptr);
+    Tensor dst_tensor(ptr, DType::kFloat16, kCuda0, {4});
+    Tensor src_tensor(ptr, DType::kFloat16, kCuda0, {4});
+    auto result = element_add(&dst_tensor, src_tensor, ExecutionContext{});
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), ErrorCode::kUnsupported);
 }
 
 }  // namespace

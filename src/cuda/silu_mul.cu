@@ -1,10 +1,11 @@
 #include "ccop/ops/silu_mul.h"
 
-#include <cassert>
 #include <cmath>
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+
+#include "ccop/cuda/error_cuda.h"
 
 namespace ccop {
 namespace {
@@ -39,25 +40,45 @@ __global__ void silu_mul_kernel(const T* gate, const T* up, T* out, unsigned int
 
 }  // namespace
 
-void silu_mul(Tensor* out, const Tensor& gate, const Tensor& up, const ExecutionContext& ctx) {
-    assert(out != nullptr && out->valid());
-    assert(gate.valid() && up.valid());
-    assert(gate.rank() == 1 && gate.is_contiguous());
-    assert(up.rank() == 1 && up.is_contiguous());
-    assert(out->rank() == 1 && out->is_contiguous());
-    assert(gate.dtype() == up.dtype());
-    assert(gate.dtype() == out->dtype());
-    assert(gate.shape(0) == up.shape(0));
-    assert(out->shape(0) == gate.shape(0));
-
+Result<void> silu_mul(Tensor* out, const Tensor& gate, const Tensor& up,
+                      const ExecutionContext& ctx) {
+    if (!(out != nullptr && out->valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(gate.valid() && up.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(gate.rank() == 1 && gate.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(up.rank() == 1 && up.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->rank() == 1 && out->is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(gate.dtype() == up.dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(gate.dtype() == out->dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(gate.shape(0) == up.shape(0))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->shape(0) == gate.shape(0))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     const unsigned int n = static_cast<unsigned int>(gate.shape(0));
+    if (!(n > 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
 
     const unsigned int block = 256;
     const unsigned int grid = (n + block - 1) / block;
     cudaStream_t s = static_cast<cudaStream_t>(ctx.stream);
 
     // 组合 dtype 分发：gate/up/out 同 dtype → kernel 模板实例。
-    // TODO(operator): 在下面每个 case 中补 launch。
     //   并行映射（与 kernel 注释一致）：
     //     block = 256（scalar 版每线程一个元素）；
     //     grid = ceil(n / block)。
@@ -71,15 +92,14 @@ void silu_mul(Tensor* out, const Tensor& gate, const Tensor& up, const Execution
                 <<<grid, block, 0, s>>>(static_cast<const __nv_bfloat16*>(gate.data()),
                                         static_cast<const __nv_bfloat16*>(up.data()),
                                         static_cast<__nv_bfloat16*>(out->data()), n);
-            break;
+            return check_cuda_launch();
         case DType::kFloat32:
-            silu_mul_kernel<float>
-                <<<grid, block, 0, s>>>(static_cast<const float*>(gate.data()),
-                                        static_cast<const float*>(up.data()),
-                                        static_cast<float*>(out->data()), n);
-            break;
+            silu_mul_kernel<float><<<grid, block, 0, s>>>(static_cast<const float*>(gate.data()),
+                                                          static_cast<const float*>(up.data()),
+                                                          static_cast<float*>(out->data()), n);
+            return check_cuda_launch();
         default:
-            return;  // 不支持的 dtype
+            return std::unexpected(ErrorCode::kUnsupported);
     }
 }
 

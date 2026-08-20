@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ccop/error.h"
 #include "ccop/execution_context.h"
 #include "ccop/tensor.h"
 
@@ -23,10 +24,11 @@ namespace ccop {
 // 四个 KV 数组必须同 dtype（BF16 或 FP32）、各自连续；slot 越界检查在
 // kernel 内做（slot_mapping 在 device，host 无法校验）。
 //
-// 算子只负责计算：参数校验用 assert 兜底，kernel 错误由调用方检查。
+// 算子只负责计算：参数错误返回 ErrorCode；kernel 错误映射后返回 ErrorCode。
 // 第一阶段：scalar 正确版，不做性能优化。
 // -----------------------------------------------------------------------------
-void write_kv_cache(const Tensor& k_new, const Tensor& v_new, Tensor* k_cache, Tensor* v_cache,
-                    const Tensor& slot_mapping, const ExecutionContext& ctx);
+Result<void> write_kv_cache(const Tensor& k_new, const Tensor& v_new, Tensor* k_cache,
+                            Tensor* v_cache, const Tensor& slot_mapping,
+                            const ExecutionContext& ctx);
 
 }  // namespace ccop

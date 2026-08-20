@@ -1,10 +1,11 @@
 #include "ccop/ops/naive_attention.h"
 
-#include <cassert>
 #include <cstdint>
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+
+#include "ccop/cuda/error_cuda.h"
 
 namespace ccop {
 namespace {
@@ -18,13 +19,13 @@ __device__ float cal_score(const T* q, const T* k, float scale, unsigned int hea
     return scale * score;
 }
 
-// NaiveAttention kernel 声明（接口已定，函数体待实现）。
+// NaiveAttention kernel：causal 语义，scalar 版每线程完整处理一个 (t, qh) 输出行。
 // 模板参数：T（q/k/v/out 的 dtype，BF16 或 FP32）。
 // 第一阶段（正确性为先，scalar 版：每线程完整处理一个 (t, qh) 输出行）。
 //
 // 数学形式（对每个 token t、每个 q 头 qh，GQA）：
 //   kv_head = qh * num_kv_heads / num_q_heads（组内 q 头共享同一 kv 头）
-//   score[s] = scale * sum_d q[t][qh][d] * k[s][kv_head][d]   （s = 0..T-1）
+//   score[s] = scale * sum_d q[t][qh][d] * k[s][kv_head][d]   （s = 0..t）
 //   m = max_s score[s]；l = sum_s exp(score[s] - m)
 //   p[s] = exp(score[s] - m) / l
 //   out[t][qh][d] = sum_s p[s] * v[s][kv_head][d]             （d = 0..hd-1）
@@ -39,7 +40,7 @@ __device__ float cal_score(const T* q, const T* k, float scale, unsigned int hea
 //   grid.x 与 block 内 threadIdx.x 一起平铺 num_tokens * num_q_heads 个
 //   输出行（block 向上取整，需越界守卫）；
 //   blockIdx.x/threadIdx.x → 行索引 r → t = r / num_q_heads、
-//   qh = r % num_q_heads；每线程对该行循环全部 num_tokens 个 kv token。
+//   qh = r % num_q_heads；每线程对该行循环 s ∈ [0, t]（causal 上界含自身）。
 //
 // 数值注意：
 //   - BF16 参与计算前提升到 float；点积与加权累加用 float 精度；
@@ -61,20 +62,20 @@ __global__ void naive_attention_kernel(const T* q, const T* k, const T* v, T* ou
     unsigned int qh = tid % num_q_heads;
     unsigned int kvh = qh * num_kv_heads / num_q_heads;
     float max_s = -INFINITY;
-    for (unsigned int s = 0; s < num_tokens; ++s) {
+    for (unsigned int s = 0; s <= t; ++s) {
         float score = cal_score<T>(q + (t * num_q_heads + qh) * head_dim,
                                    k + (s * num_kv_heads + kvh) * head_dim, scale, head_dim);
         max_s = max_s < score ? score : max_s;
     }
     float sum_es = 0;
-    for (unsigned int s = 0; s < num_tokens; ++s) {
+    for (unsigned int s = 0; s <= t; ++s) {
         sum_es += expf(cal_score<T>(q + (t * num_q_heads + qh) * head_dim,
                                     k + (s * num_kv_heads + kvh) * head_dim, scale, head_dim) -
                        max_s);
     }
     for (unsigned int d = 0; d < head_dim; ++d) {
         float sum = 0;
-        for (unsigned int s = 0; s < num_tokens; ++s) {
+        for (unsigned int s = 0; s <= t; ++s) {
             float p = expf(cal_score<T>(q + (t * num_q_heads + qh) * head_dim,
                                         k + (s * num_kv_heads + kvh) * head_dim, scale, head_dim) -
                            max_s) /
@@ -87,35 +88,69 @@ __global__ void naive_attention_kernel(const T* q, const T* k, const T* v, T* ou
 
 }  // namespace
 
-void naive_attention(const Tensor& q, const Tensor& k, const Tensor& v, Tensor* out, float scale,
-                     const ExecutionContext& ctx) {
-    assert(q.valid() && k.valid() && v.valid());
-    assert(q.rank() == 3 && q.is_contiguous());
-    assert(k.rank() == 3 && k.is_contiguous());
-    assert(v.rank() == 3 && v.is_contiguous());
-    assert(out != nullptr && out->valid());
-    assert(out->rank() == 3 && out->is_contiguous());
-    assert(q.dtype() == k.dtype());
-    assert(q.dtype() == v.dtype());
-    assert(q.dtype() == out->dtype());
-    assert(scale > 0.0f);
-
+Result<void> naive_attention(const Tensor& q, const Tensor& k, const Tensor& v, Tensor* out,
+                             float scale, const ExecutionContext& ctx) {
+    if (!(q.valid() && k.valid() && v.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q.rank() == 3 && q.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k.rank() == 3 && k.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v.rank() == 3 && v.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out != nullptr && out->valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->rank() == 3 && out->is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q.dtype() == k.dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q.dtype() == v.dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q.dtype() == out->dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(scale > 0.0f)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     const unsigned int num_tokens = static_cast<unsigned int>(q.shape(0));
     const unsigned int num_q_heads = static_cast<unsigned int>(q.shape(1));
     const unsigned int num_kv_heads = static_cast<unsigned int>(k.shape(1));
     const unsigned int head_dim = static_cast<unsigned int>(q.shape(2));
-    assert(num_tokens > 0 && num_q_heads > 0 && num_kv_heads > 0 && head_dim > 0);
-    assert(num_q_heads % num_kv_heads == 0);  // GQA：q 头按组共享 kv 头
-    assert(k.shape(0) == static_cast<std::int64_t>(num_tokens));
-    assert(v.shape(0) == static_cast<std::int64_t>(num_tokens));
-    assert(k.shape(2) == static_cast<std::int64_t>(head_dim));
-    assert(v.shape(2) == static_cast<std::int64_t>(head_dim));
-    assert(out->shape(0) == static_cast<std::int64_t>(num_tokens));
-    assert(out->shape(1) == static_cast<std::int64_t>(num_q_heads));
-    assert(out->shape(2) == static_cast<std::int64_t>(head_dim));
-
-    // 组合 dtype 分发：q/k/v/out 同 dtype → kernel 模板实例。
-    // TODO(operator): 在下面每个 case 中补 launch。
+    if (!(num_tokens > 0 && num_q_heads > 0 && num_kv_heads > 0 && head_dim > 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(num_q_heads % num_kv_heads == 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k.shape(0) == static_cast<std::int64_t>(num_tokens))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v.shape(0) == static_cast<std::int64_t>(num_tokens))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k.shape(2) == static_cast<std::int64_t>(head_dim))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(v.shape(2) == static_cast<std::int64_t>(head_dim))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->shape(0) == static_cast<std::int64_t>(num_tokens))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->shape(1) == static_cast<std::int64_t>(num_q_heads))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->shape(2) == static_cast<std::int64_t>(head_dim))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     //   并行映射（与 kernel 注释一致）：
     //     block = 256（scalar 版每线程一个输出行）；
     //     grid.x = ceil(num_tokens * num_q_heads / block)。
@@ -135,15 +170,15 @@ void naive_attention(const Tensor& q, const Tensor& k, const Tensor& v, Tensor* 
                                         static_cast<const __nv_bfloat16*>(v.data()),
                                         static_cast<__nv_bfloat16*>(out->data()), scale, num_tokens,
                                         num_q_heads, num_kv_heads, head_dim);
-            break;
+            return check_cuda_launch();
         case DType::kFloat32:
             naive_attention_kernel<float><<<grid, block, 0, s>>>(
                 static_cast<const float*>(q.data()), static_cast<const float*>(k.data()),
                 static_cast<const float*>(v.data()), static_cast<float*>(out->data()), scale,
                 num_tokens, num_q_heads, num_kv_heads, head_dim);
-            break;
+            return check_cuda_launch();
         default:
-            return;  // 不支持的 dtype
+            return std::unexpected(ErrorCode::kUnsupported);
     }
 }
 

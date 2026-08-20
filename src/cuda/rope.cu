@@ -1,10 +1,11 @@
 #include "ccop/ops/rope.h"
 
-#include <cassert>
 #include <cstdint>
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+
+#include "ccop/cuda/error_cuda.h"
 
 namespace ccop {
 namespace {
@@ -72,35 +73,70 @@ __global__ void rope_split_half_kernel(T* q, T* k, const int32_t* positions,
 
 }  // namespace
 
-void rope(Tensor* q, Tensor* k, const Tensor& positions, const Tensor& rope_cache,
-          unsigned int rotary_dim, const ExecutionContext& ctx) {
-    assert(q != nullptr && q->valid());
-    assert(k != nullptr && k->valid());
-    assert(q->rank() == 3 && k->rank() == 3);
-    assert(q->is_contiguous() && k->is_contiguous());
-    assert(q->dtype() == k->dtype());
-    assert(q->shape(0) == k->shape(0));
-    assert(q->shape(2) == k->shape(2));
-
+Result<void> rope(Tensor* q, Tensor* k, const Tensor& positions, const Tensor& rope_cache,
+                  unsigned int rotary_dim, const ExecutionContext& ctx) {
+    if (!(q != nullptr && q->valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(k != nullptr && k->valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q->rank() == 3 && k->rank() == 3)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q->is_contiguous() && k->is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q->dtype() == k->dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q->shape(0) == k->shape(0))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(q->shape(2) == k->shape(2))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     const unsigned int num_tokens = static_cast<unsigned int>(q->shape(0));
     const unsigned int num_q_heads = static_cast<unsigned int>(q->shape(1));
     const unsigned int num_kv_heads = static_cast<unsigned int>(k->shape(1));
     const unsigned int head_dim = static_cast<unsigned int>(q->shape(2));
-    assert(rotary_dim > 0 && rotary_dim % 2 == 0 && rotary_dim <= head_dim);
-
-    assert(positions.valid());
-    assert(positions.rank() == 1 && positions.shape(0) == num_tokens);
-    assert(positions.is_contiguous());
-    assert(positions.dtype() == DType::kInt32);
-
-    assert(rope_cache.valid());
-    assert(rope_cache.rank() == 3 && rope_cache.is_contiguous());
-    assert(rope_cache.dtype() == DType::kFloat32);
-    assert(rope_cache.shape(1) == rotary_dim / 2);
-    assert(rope_cache.shape(2) == 2);
+    if (!(num_tokens > 0 && num_q_heads > 0 && num_kv_heads > 0 && head_dim > 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(rotary_dim > 0 && rotary_dim % 2 == 0 && rotary_dim <= head_dim)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(positions.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(positions.rank() == 1 && positions.shape(0) == num_tokens)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(positions.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(positions.dtype() == DType::kInt32)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(rope_cache.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(rope_cache.rank() == 3 && rope_cache.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(rope_cache.dtype() == DType::kFloat32)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(rope_cache.shape(1) == rotary_dim / 2)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(rope_cache.shape(2) == 2)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     const unsigned int cache_max_position = static_cast<unsigned int>(rope_cache.shape(0));
-    assert(cache_max_position > 0);
-
+    if (!(cache_max_position > 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     const unsigned int half_rotary_dim = rotary_dim / 2;
     const unsigned int total_heads = num_q_heads + num_kv_heads;
     const unsigned int block = 64;
@@ -108,7 +144,6 @@ void rope(Tensor* q, Tensor* k, const Tensor& positions, const Tensor& rope_cach
     cudaStream_t s = static_cast<cudaStream_t>(ctx.stream);
 
     // 组合 dtype 分发：q/k 同 dtype → kernel 模板实例。
-    // TODO(operator): 在下面每个 case 中补 launch。
     //   并行映射（与 kernel 注释一致）：
     //     block = 64（scalar 版每线程一个 pair 元素）；
     //     grid.x = ceil(half_rotary_dim / block)，grid.y = num_tokens，
@@ -120,21 +155,20 @@ void rope(Tensor* q, Tensor* k, const Tensor& positions, const Tensor& rope_cach
     switch (q->dtype()) {
         case DType::kBFloat16:
             rope_split_half_kernel<__nv_bfloat16><<<grid, block, 0, s>>>(
-                static_cast<__nv_bfloat16*>(q->data()),
-                static_cast<__nv_bfloat16*>(k->data()),
+                static_cast<__nv_bfloat16*>(q->data()), static_cast<__nv_bfloat16*>(k->data()),
                 static_cast<const int32_t*>(positions.data()),
-                static_cast<const float*>(rope_cache.data()), num_q_heads, num_kv_heads,
-                head_dim, half_rotary_dim, cache_max_position);
-            break;
+                static_cast<const float*>(rope_cache.data()), num_q_heads, num_kv_heads, head_dim,
+                half_rotary_dim, cache_max_position);
+            return check_cuda_launch();
         case DType::kFloat32:
             rope_split_half_kernel<float><<<grid, block, 0, s>>>(
                 static_cast<float*>(q->data()), static_cast<float*>(k->data()),
                 static_cast<const int32_t*>(positions.data()),
-                static_cast<const float*>(rope_cache.data()), num_q_heads, num_kv_heads,
-                head_dim, half_rotary_dim, cache_max_position);
-            break;
+                static_cast<const float*>(rope_cache.data()), num_q_heads, num_kv_heads, head_dim,
+                half_rotary_dim, cache_max_position);
+            return check_cuda_launch();
         default:
-            return;  // 不支持的 q/k dtype
+            return std::unexpected(ErrorCode::kUnsupported);
     }
 }
 

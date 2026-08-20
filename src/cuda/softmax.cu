@@ -1,9 +1,9 @@
 #include "ccop/ops/softmax.h"
 
-#include <cassert>
-
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+
+#include "ccop/cuda/error_cuda.h"
 
 namespace ccop {
 namespace {
@@ -50,25 +50,38 @@ __global__ void softmax_kernel(const T* input, T* out, unsigned int rows, unsign
 
 }  // namespace
 
-void softmax(Tensor* out, const Tensor& input, const ExecutionContext& ctx) {
-    assert(out != nullptr && out->valid());
-    assert(input.valid());
-    assert(input.rank() == 2 && input.is_contiguous());
-    assert(out->rank() == 2 && out->is_contiguous());
-    assert(out->dtype() == input.dtype());
-    assert(out->shape(0) == input.shape(0));
-    assert(out->shape(1) == input.shape(1));
-
+Result<void> softmax(Tensor* out, const Tensor& input, const ExecutionContext& ctx) {
+    if (!(out != nullptr && out->valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(input.valid())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(input.rank() == 2 && input.is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->rank() == 2 && out->is_contiguous())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->dtype() == input.dtype())) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->shape(0) == input.shape(0))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
+    if (!(out->shape(1) == input.shape(1))) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     const unsigned int rows = static_cast<unsigned int>(input.shape(0));
     const unsigned int cols = static_cast<unsigned int>(input.shape(1));
-    assert(rows > 0 && cols > 0);
-
+    if (!(rows > 0 && cols > 0)) {
+        return std::unexpected(ErrorCode::kInvalidArgument);
+    }
     const unsigned int block = 256;
     const unsigned int grid = (rows + block - 1) / block;
     cudaStream_t s = static_cast<cudaStream_t>(ctx.stream);
 
     // 组合 dtype 分发：input/out 同 dtype → kernel 模板实例。
-    // TODO(operator): 在下面每个 case 中补 launch。
     //   并行映射（与 kernel 注释一致）：
     //     block = 256（scalar 版每线程一行）；
     //     grid = ceil(rows / block)。
@@ -81,14 +94,14 @@ void softmax(Tensor* out, const Tensor& input, const ExecutionContext& ctx) {
             softmax_kernel<__nv_bfloat16>
                 <<<grid, block, 0, s>>>(static_cast<const __nv_bfloat16*>(input.data()),
                                         static_cast<__nv_bfloat16*>(out->data()), rows, cols);
-            break;
+            return check_cuda_launch();
         case DType::kFloat32:
             softmax_kernel<float><<<grid, block, 0, s>>>(static_cast<const float*>(input.data()),
                                                          static_cast<float*>(out->data()), rows,
                                                          cols);
-            break;
+            return check_cuda_launch();
         default:
-            return;  // 不支持的 dtype
+            return std::unexpected(ErrorCode::kUnsupported);
     }
 }
 

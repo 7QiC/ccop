@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ccop/error.h"
 #include "ccop/execution_context.h"
 #include "ccop/tensor.h"
 
@@ -13,6 +14,8 @@ namespace ccop {
 //   k:   [num_tokens, num_kv_heads, head_dim]（独立输出）
 //   v:   [num_tokens, num_kv_heads, head_dim]（独立输出）
 //
+// num_q_heads / num_kv_heads / head_dim 由 q/k/v 的 shape 推导，调用方不重复传。
+//
 // 每个 token 的行内布局（全部行主序平铺）：
 //   qkv[t] = [ Q | K | V ]
 //     Q 段：num_q_heads * head_dim 个元素，q[t][h][d] = qkv[t][h * head_dim + d]
@@ -24,10 +27,10 @@ namespace ccop {
 // （可与 qkv 是同一 buffer 的不同切片，只要求各自视图连续）。
 // 纯数据搬运，无算术。
 //
-// 算子只负责计算：参数校验用 assert 兜底，kernel 错误由调用方检查。
+// 算子只负责计算：参数错误返回 ErrorCode；kernel 错误映射后返回 ErrorCode。
 // 第一阶段：scalar 正确版，不做性能优化。
 // -----------------------------------------------------------------------------
-void split_qkv(const Tensor& qkv, Tensor* q, Tensor* k, Tensor* v, unsigned int num_q_heads,
-               unsigned int num_kv_heads, const ExecutionContext& ctx);
+Result<void> split_qkv(const Tensor& qkv, Tensor* q, Tensor* k, Tensor* v,
+                       const ExecutionContext& ctx);
 
 }  // namespace ccop
